@@ -3,40 +3,41 @@ import NASBridgeCore
 import ServiceManagement
 import SwiftUI
 
-/// tray 選單：每個連線一個子選單（狀態、掛載／卸載、在 Finder 開啟、編輯），加上全域動作。
+/// tray 選單：每個掛載一個子選單（狀態、掛載／卸載、在 Finder 開啟、編輯），加上全域動作。
 struct MenuBarMenu: View {
     let manager: MountManager
 
     var body: some View {
-        Group {
-            if manager.fuse == nil {
-                Button("macFUSE Is Not Installed…") { WindowOpener.shared.open(WindowID.setup) }
-                Divider()
-            }
-            if manager.profiles.isEmpty {
-                Text("No Connections")
-            }
-            ForEach(manager.profiles) { profile in
-                ProfileMenu(profile: profile, instance: manager.instance(for: profile.id), manager: manager)
-            }
+        if manager.fuse == nil {
+            Button("Install macFUSE…") { WindowOpener.shared.open(WindowID.setup) }
             Divider()
-            Button("Mount All") { Task { await manager.mountAll() } }
-                .disabled(manager.profiles.isEmpty)
-            Button("Unmount All") { Task { await manager.unmountAll(force: false) } }
-                .disabled(manager.mountedCount == 0)
-            Divider()
-            Button("Connections…") { WindowOpener.shared.open(WindowID.connections) }
-                .keyboardShortcut(",")
-            LaunchAtLoginToggle()
-            Divider()
-            Button("Quit NAS Bridge") { NSApp.terminate(nil) }
-                .keyboardShortcut("q")
         }
+        if manager.mounts.isEmpty {
+            Text("No Mounts")
+        }
+        ForEach(manager.mounts) { mount in
+            MountMenu(mount: mount, instance: manager.instance(for: mount.id), manager: manager)
+        }
+        Divider()
+        Button("Mount All") {
+            Task { if await !manager.mountAll() { WindowOpener.shared.open(WindowID.setup) } }
+        }
+        .disabled(manager.mounts.isEmpty)
+        Button("Unmount All") { Task { await manager.unmountAll(force: false) } }
+            .disabled(manager.mountedCount == 0)
+        Divider()
+        Button("Mounts…") { MainWindowState.shared.show(.mounts) }
+            .keyboardShortcut(",")
+        Button("Accounts…") { MainWindowState.shared.show(.accounts) }
+        LaunchAtLoginToggle()
+        Divider()
+        Button("Quit NAS Bridge") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
     }
 }
 
-private struct ProfileMenu: View {
-    let profile: MountProfile
+private struct MountMenu: View {
+    let mount: MountProfile
     let instance: MountInstance
     let manager: MountManager
 
@@ -47,23 +48,20 @@ private struct ProfileMenu: View {
             Divider()
             switch instance.state {
             case .unmounted, .failed:
-                Button("Mount") { Task { await manager.mount(profile.id) } }
+                Button("Mount") { Task { await manager.mountOrPromptInstall(mount.id) } }
             case .mounted:
                 Button("Open in Finder") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: instance.mountPoint))
                 }
-                Button("Unmount") { Task { await manager.unmount(profile.id) } }
-                Button("Force Unmount") { Task { await manager.unmount(profile.id, force: true) } }
+                Button("Unmount") { Task { await manager.unmount(mount.id) } }
+                Button("Force Unmount") { Task { await manager.unmount(mount.id, force: true) } }
             case .mounting, .unmounting:
-                Button("Cancel") { Task { await manager.unmount(profile.id, force: true) } }
+                Button("Cancel") { Task { await manager.unmount(mount.id, force: true) } }
             }
             Divider()
-            Button("Edit…") {
-                ConnectionsSelection.shared.selected = profile.id
-                WindowOpener.shared.open(WindowID.connections)
-            }
+            Button("Edit…") { MainWindowState.shared.show(.mounts, select: mount.id) }
         } label: {
-            Label(profile.name, systemImage: StatusText.symbol(instance.state))
+            Label(mount.name, systemImage: StatusText.symbol(instance.state))
         }
     }
 }
@@ -86,7 +84,7 @@ private struct LaunchAtLoginToggle: View {
     }
 }
 
-/// 狀態的顯示文字與圖示（選單與連線視窗共用）。
+/// 狀態的顯示文字與圖示（選單與主視窗共用）。
 enum StatusText {
     static func describe(_ s: MountState) -> String {
         switch s {
@@ -104,6 +102,15 @@ enum StatusText {
         case .mounting, .unmounting: "arrow.triangle.2.circlepath"
         case .mounted: "checkmark.circle.fill"
         case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    static func color(_ s: MountState?) -> Color {
+        switch s {
+        case .mounted: .green
+        case .failed: .orange
+        case .mounting, .unmounting: .blue
+        default: .secondary
         }
     }
 }

@@ -8,16 +8,18 @@ public struct ConnectionReport: Sendable, Equatable {
     public var untrustedFingerprint: String?
 }
 
-/// 對一組設定做一次不掛載的連線檢查：認證、遠端路徑、配額、部分寫入能力。
+/// 對帳號（＋遠端路徑）做一次不掛載的連線檢查：認證、遠端路徑、配額、（選擇性）部分寫入能力。
 public enum ConnectionTester {
-    public static func test(_ profile: MountProfile, password: String) async -> ConnectionReport {
-        if let msg = profile.validationError() { return ConnectionReport(ok: false, message: msg) }
+    /// - Parameter probeWrites: 是否探測部分寫入（會在遠端建立並刪除一個隱藏檔）。
+    public static func test(_ account: Account, remotePath: String = "/", password: String,
+                            probeWrites: Bool = false) async -> ConnectionReport {
+        if let msg = account.validationError() { return ConnectionReport(ok: false, message: msg) }
         // WebDAVClient 是阻塞式 API，離開 main actor 執行
-        return await Task.detached { run(profile, password) }.value
+        return await Task.detached { run(account, remotePath, password, probeWrites) }.value
     }
 
-    private static func run(_ profile: MountProfile, _ password: String) -> ConnectionReport {
-        guard let client = WebDAVClient(profile: profile, password: password, timeout: 15) else {
+    private static func run(_ account: Account, _ remotePath: String, _ password: String, _ probeWrites: Bool) -> ConnectionReport {
+        guard let client = WebDAVClient(account: account, remotePath: remotePath, password: password, timeout: 15) else {
             return ConnectionReport(ok: false, message: "Server URL is invalid.")
         }
         do {
@@ -28,7 +30,7 @@ public enum ConnectionTester {
             if let q = try? client.quota(), let free = q.available {
                 lines.append("Free: " + ByteCountFormatter.string(fromByteCount: free, countStyle: .file))
             }
-            if !profile.readOnly {
+            if probeWrites {
                 lines.append("Write mode: " + describe(client.probePartialWrite(in: "/")))
             }
             return ConnectionReport(ok: true, message: lines.joined(separator: "\n"))

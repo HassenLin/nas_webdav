@@ -13,20 +13,21 @@ struct NASBridgeApp: App {
             TrayIcon(manager: delegate.manager)
         }
 
-        Window("Connections", id: WindowID.connections) {
-            ConnectionsView(manager: delegate.manager)
+        Window("NAS Bridge", id: WindowID.main) {
+            MainWindow(manager: delegate.manager)
         }
-        .defaultSize(width: 760, height: 520)
+        .defaultSize(width: 820, height: 540)
 
-        Window("macFUSE Setup", id: WindowID.setup) {
-            SetupGuideView(manager: delegate.manager)
+        Window("Install macFUSE", id: WindowID.setup) {
+            MacFUSEDialog(manager: delegate.manager)
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }
 
 enum WindowID {
-    static let connections = "connections"
+    static let main = "main"
     static let setup = "setup"
 }
 
@@ -36,7 +37,7 @@ struct TrayIcon: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let states = manager.profiles.map { manager.instance(for: $0.id).state }
+        let states = manager.mounts.map { manager.instance(for: $0.id).state }
         let failed = states.contains { if case .failed = $0 { true } else { false } }
         let mounted = states.contains(.mounted)
         Image(systemName: failed ? "externaldrive.badge.exclamationmark"
@@ -63,8 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 以 `swift run` 執行（沒有 Info.plist 的 LSUIElement）時也不出現在 Dock
         NSApp.setActivationPolicy(.accessory)
+        if manager.fuse == nil {
+            WindowOpener.shared.open(WindowID.setup)          // 沒有 macFUSE：先跳安裝對話框
+        } else if manager.accounts.isEmpty {
+            MainWindowState.shared.show(.accounts)            // 首次使用：先建帳號
+        }
         Task { await manager.autoMount() }
-        if manager.profiles.isEmpty { WindowOpener.shared.open(WindowID.connections) }
     }
 
     /// 結束前先卸載全部（強制）並等 worker 結束，避免留下失效的掛載點。
@@ -88,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class WindowOpener {
     static let shared = WindowOpener()
-    var action: OpenWindowAction?
+    private var action: OpenWindowAction?
     private var pending: [String] = []
 
     func register(_ action: OpenWindowAction) {
@@ -101,5 +106,12 @@ final class WindowOpener {
         guard let action else { return pending.append(id) }
         action(id: id)
         NSApp.activate()
+    }
+}
+
+extension MountManager {
+    /// 掛載；未安裝 macFUSE 時改為開啟安裝對話框。
+    func mountOrPromptInstall(_ id: UUID) async {
+        if await !mount(id) { WindowOpener.shared.open(WindowID.setup) }
     }
 }

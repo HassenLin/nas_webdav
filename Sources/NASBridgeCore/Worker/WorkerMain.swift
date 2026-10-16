@@ -14,11 +14,13 @@ public enum WorkerMain {
         } catch {
             fail("invalid worker config: \(error.localizedDescription)")
         }
-        let profile = config.profile
-        if let msg = profile.validationError() { fail(msg) }
+        let (account, profile) = (config.account, config.mount)
+        if let msg = account.validationError() ?? profile.validationError() { fail(msg) }
         guard FuseLibrary.detect() != nil else { fail("macFUSE is not installed") }
 
-        guard let client = WebDAVClient(profile: profile, password: config.password) else { fail("Server URL is invalid.") }
+        guard let client = WebDAVClient(account: account, remotePath: profile.remotePath, password: config.password) else {
+            fail("Server URL is invalid.")
+        }
         do {
             guard let root = try client.propfind("/", depth: 0).first, root.isDirectory else {
                 fail("Remote path is not a folder.")
@@ -41,7 +43,7 @@ public enum WorkerMain {
         watchParent(mountPoint: mountPoint)
         let fs = WebDAVFileSystem(client: client, readOnly: profile.readOnly, writeMethod: method)
         do {
-            let code = try FuseHost.run(fs: fs, mountPoint: mountPoint, options: mountOptions(profile)) {
+            let code = try FuseHost.run(fs: fs, mountPoint: mountPoint, options: mountOptions(profile, account: account)) {
                 emit(.ready)
             }
             exit(code)
@@ -51,11 +53,11 @@ public enum WorkerMain {
     }
 
     /// macFUSE 掛載選項。值中的逗號會破壞 `-o` 解析，一律換掉。
-    static func mountOptions(_ p: MountProfile) -> [String] {
+    static func mountOptions(_ p: MountProfile, account: Account) -> [String] {
         let clean = { (s: String) in s.replacingOccurrences(of: ",", with: " ").replacingOccurrences(of: "=", with: "-") }
         var opts = [
             "volname=\(clean(p.name))",
-            "fsname=nasbridge@\(clean(p.baseURL?.host() ?? "webdav"))",
+            "fsname=nasbridge@\(clean(account.url?.host() ?? "webdav"))",
             "noappledouble",      // 不產生 ._ 檔（WebDAV 上只會是垃圾）
             "noapplexattr",       // 不轉送 com.apple.* 延伸屬性
             "iosize=1048576",     // 與讀取區塊大小一致，減少請求數

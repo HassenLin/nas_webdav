@@ -11,6 +11,10 @@
 | libfuse 連結 | 手寫最小 ABI 標頭＋執行期 `dlopen` | 未裝 macFUSE 也能建置與啟動（顯示安裝導引）；FUSE-T 可作替代。代價是 ABI 由人維護 → `tools/check-fuse-abi.sh` 對照真實標頭 |
 | FUSE API 版本 | libfuse 2（高階 API，FUSE_USE_VERSION 26） | ABI 穩定、macFUSE 與 FUSE-T 皆提供。macFUSE 免 kext 的 FSKit 後端只支援 libfuse3（`-o backend=fskit`），日後可另寫 libfuse3 shim |
 | 多實例 | 每個掛載一個 worker 子行程（同一執行檔 `--fuse-worker`） | `fuse_main` 處理訊號、全域狀態，一行程一掛載最單純；一個掛載卡住或崩潰不影響其他掛載與 UI |
+| 帳號與掛載分離 | `Account`（伺服器＋帳號＋鑰匙圈密碼）與 `MountProfile`（帳號＋遠端路徑→掛載點） | 同一台 NAS 常掛多個共用資料夾，帳密只需維護一份；被使用中的帳號不可刪，避免懸空參照 |
+| 鑰匙圈項目 | 網際網路密碼（伺服器＋埠＋https＋帳號為鍵） | 「鑰匙圈存取」以伺服器顯示、可沿用 Finder 已存的密碼；改網址或帳號時自動搬移 |
+| macFUSE 安裝 | app 內下載官方 dmg → `.sha256` 比對 → `pkgutil --check-signature` 限定作者 Team ID `3T5GSNBU6W` → 交給「安裝程式」 | 一鍵完成又不需要 app 取得 root；校驗碼防傳輸損毀，Team ID 防 release 被換成他人簽章的套件 |
+| Homebrew 途徑 | 產生 `.command` 用「終端機」開啟 | 不需「自動化」權限；brew 自己會要求管理者密碼 |
 | 密碼傳遞 | 主 app 讀鑰匙圈 → stdin JSON 給 worker | 參數／環境變數會被 `ps` 看到；worker 不碰鑰匙圈也就不會跳第二次授權 |
 | worker 生命週期 | stdout 事件行（CONNECTED／READY／ERROR）；行程結束＝已卸載 | 協定極簡、無需 XPC；worker 監看父行程，app 當掉時自行卸載 |
 | 掛載狀態 | `MountInstance` FSM：停留 unmounted／mounted／failed，過渡 mounting／unmounting | 所有轉移集中在 `handle(_:)`，未定義的事件明確忽略並記錄 |

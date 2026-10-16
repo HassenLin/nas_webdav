@@ -2,40 +2,75 @@ import Foundation
 import Testing
 @testable import NASBridgeCore
 
-@Suite struct MountProfileTests {
-    func profile(_ server: String, _ remote: String = "/") -> MountProfile {
-        var p = MountProfile()
-        p.serverURL = server
-        p.remotePath = remote
-        p.username = "u"
-        return p
+@Suite struct AccountAndMountTests {
+    func account(_ server: String) -> Account {
+        var a = Account()
+        a.serverURL = server
+        a.username = "u"
+        return a
+    }
+
+    func mount(_ remote: String, on a: Account) -> URL? {
+        var m = MountProfile(accountID: a.id)
+        m.remotePath = remote
+        return m.baseURL(on: a)
     }
 
     @Test func baseURLJoinsRemotePath() {
-        #expect(profile("https://nas:5006", "/home").baseURL?.absoluteString == "https://nas:5006/home")
-        #expect(profile("https://nas:5006/", "home/").baseURL?.absoluteString == "https://nas:5006/home")
-        #expect(profile("https://nas:9001", "/").baseURL?.absoluteString == "https://nas:9001")
-        #expect(profile("https://nas/dav", "/a b").baseURL?.path(percentEncoded: false) == "/dav/a b")
+        #expect(mount("/home", on: account("https://nas:5006"))?.absoluteString == "https://nas:5006/home")
+        #expect(mount("home/", on: account("https://nas:5006/"))?.absoluteString == "https://nas:5006/home")
+        #expect(mount("/", on: account("https://nas:9001"))?.absoluteString == "https://nas:9001")
+        #expect(mount("/a b", on: account("https://nas/dav"))?.path(percentEncoded: false) == "/dav/a b")
     }
 
     @Test func onlyHTTPSAllowed() {
-        #expect(profile("http://nas:5005").validationError() == "Only https:// is allowed.")
-        #expect(profile("https://nas:5006").validationError() == nil)
-        #expect(profile("https://").validationError() == "Server URL is invalid.")
+        #expect(account("http://nas:5005").validationError() == "Only https:// is allowed.")
+        #expect(account("https://nas:5006").validationError() == nil)
+        #expect(account("https://").validationError() == "Server URL is invalid.")
+    }
+
+    @Test func displayNameFallsBackToHost() {
+        var a = account("https://www.hassen.myds.me:9001")
+        #expect(a.displayName == "www.hassen.myds.me")
+        a.name = "Home NAS"
+        #expect(a.displayName == "Home NAS")
     }
 
     @Test func fingerprintNormalization() {
         let fp = "C8:00:5F:75:B6:3B:36:DD:A1:16:49:78:77:89:D1:B2:6D:B5:69:DB:8B:87:02:64:DB:7F:E5:4D:1D:B6:FA:2F"
-        #expect(MountProfile.normalizeFingerprint(fp).count == 64)
-        var p = profile("https://nas")
-        p.pinnedCertSHA256 = "abc"
-        #expect(p.validationError() != nil)
+        #expect(Account.normalizeFingerprint(fp).count == 64)
+        var a = account("https://nas")
+        a.pinnedCertSHA256 = "abc"
+        #expect(a.validationError() != nil)
     }
 
     @Test func defaultMountPointUnderHomeVolumes() {
-        var p = profile("https://nas")
-        p.name = "My/NAS"
-        #expect(p.resolvedMountPoint.hasSuffix("/Volumes/My-NAS"))
+        var m = MountProfile(accountID: UUID())
+        m.name = "My/NAS"
+        #expect(m.resolvedMountPoint.hasSuffix("/Volumes/My-NAS"))
+    }
+
+    @Test func configRoundTrip() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nb-config-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let a = account("https://nas:5006")
+        let config = AppConfig(accounts: [a], mounts: [MountProfile(accountID: a.id)])
+        try ConfigStore.save(config, to: url)
+        #expect(ConfigStore.load(from: url) == config)
+    }
+
+    /// 被掛載使用中的帳號不能刪；掛載不能指向不存在的帳號。（不碰鑰匙圈：password 傳 nil）
+    @MainActor @Test func managerRefusesDanglingReferences() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nb-config-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = MountManager(configURL: url)
+        let a = account("https://nas:5006")
+        try manager.saveAccount(a, password: nil)
+        #expect(throws: DAVError.self) { try manager.saveMount(MountProfile(accountID: UUID())) }
+        try manager.saveMount(MountProfile(accountID: a.id))
+        #expect(throws: DAVError.self) { try manager.deleteAccount(a.id) }
+        #expect(manager.accounts.count == 1)
+        #expect(MountManager(configURL: url).mounts.count == 1)   // 已持久化
     }
 }
 
@@ -49,11 +84,12 @@ import Testing
     }
 
     @Test func mountOptionsEscapeCommas() {
-        var p = MountProfile()
+        var a = Account()
+        a.serverURL = "https://nas.local:5006"
+        var p = MountProfile(accountID: a.id)
         p.name = "a,b=c"
-        p.serverURL = "https://nas.local:5006"
         p.readOnly = true
-        let opts = WorkerMain.mountOptions(p)
+        let opts = WorkerMain.mountOptions(p, account: a)
         #expect(opts.contains("volname=a b-c"))
         #expect(opts.contains("fsname=nasbridge@nas.local"))
         #expect(opts.contains("rdonly"))

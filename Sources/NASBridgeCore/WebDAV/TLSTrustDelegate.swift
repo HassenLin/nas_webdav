@@ -21,7 +21,7 @@ final class TLSTrustDelegate: NSObject, URLSessionTaskDelegate, @unchecked Senda
     var trustRejected: Bool { lock.withLock { _trustRejected } }
 
     init(pinnedSHA256: String, username: String, password: String) {
-        self.pinnedSHA256 = MountProfile.normalizeFingerprint(pinnedSHA256)
+        self.pinnedSHA256 = Account.normalizeFingerprint(pinnedSHA256)
         self.credential = URLCredential(user: username, password: password, persistence: .forSession)
     }
 

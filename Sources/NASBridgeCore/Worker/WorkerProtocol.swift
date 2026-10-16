@@ -12,11 +12,13 @@ public enum WorkerProtocol {
 }
 
 public struct WorkerConfig: Codable, Sendable {
-    public var profile: MountProfile
+    public var account: Account
+    public var mount: MountProfile
     public var password: String
 
-    public init(profile: MountProfile, password: String) {
-        self.profile = profile
+    public init(account: Account, mount: MountProfile, password: String) {
+        self.account = account
+        self.mount = mount
         self.password = password
     }
 }

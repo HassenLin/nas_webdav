@@ -90,12 +90,12 @@ public final class MountInstance: Identifiable {
     // MARK: - 指令
 
     /// 啟動 worker 掛載。只在 `unmounted` / `failed` 有效。
-    func mount(_ profile: MountProfile, password: String) async {
+    func mount(_ config: WorkerConfig) async {
         switch state {
         case .unmounted, .failed: break
         default: return
         }
-        mountPoint = profile.resolvedMountPoint
+        mountPoint = config.mount.resolvedMountPoint
         pendingError = nil
         transition(to: .mounting)
 
@@ -129,8 +129,7 @@ public final class MountInstance: Identifiable {
             return transition(to: .failed("Cannot start worker: \(error.localizedDescription)"))
         }
         process = p
-        let config = try? JSONEncoder().encode(WorkerConfig(profile: profile, password: password))
-        stdin.fileHandleForWriting.write(config ?? Data())
+        stdin.fileHandleForWriting.write((try? JSONEncoder().encode(config)) ?? Data())
         try? stdin.fileHandleForWriting.close()
     }
 

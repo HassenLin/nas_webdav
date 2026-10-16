@@ -55,10 +55,13 @@ public final class WebDAVClient: @unchecked Sendable {
         self.authorization = "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
     }
 
-    public convenience init?(profile: MountProfile, password: String, timeout: TimeInterval = 30) {
-        guard let url = profile.baseURL else { return nil }
-        self.init(baseURL: url, username: profile.username, password: password,
-                  pinnedSHA256: profile.pinnedCertSHA256, timeout: timeout)
+    /// 以帳號＋遠端路徑建立；URL 無效時回傳 nil。
+    public convenience init?(account: Account, remotePath: String = "/", password: String, timeout: TimeInterval = 30) {
+        var mount = MountProfile(accountID: account.id)
+        mount.remotePath = remotePath
+        guard let url = mount.baseURL(on: account) else { return nil }
+        self.init(baseURL: url, username: account.username, password: password,
+                  pinnedSHA256: account.pinnedCertSHA256, timeout: timeout)
     }
 
     deinit { session.invalidateAndCancel() }
