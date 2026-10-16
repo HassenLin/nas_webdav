@@ -24,8 +24,12 @@ public struct MountProfile: Codable, Identifiable, Hashable, Sendable {
 
     /// 解析後的實際掛載點。
     public var resolvedMountPoint: String {
-        if !mountPoint.isEmpty { return (mountPoint as NSString).expandingTildeInPath }
-        let safe = name.replacingOccurrences(of: "/", with: "-")
+        mountPoint.isEmpty ? Self.defaultMountPoint(name: name, id: id) : (mountPoint as NSString).expandingTildeInPath
+    }
+
+    /// 預設掛載點 `~/Volumes/<name>`（不用 /Volumes：一般使用者無權在那裡建立資料夾）。
+    public static func defaultMountPoint(name: String, id: UUID) -> String {
+        let safe = name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Volumes/\(safe.isEmpty ? id.uuidString : safe)").path
     }
