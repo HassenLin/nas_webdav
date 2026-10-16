@@ -59,7 +59,9 @@ public enum WorkerMain {
             "volname=\(clean(p.name))",
             "fsname=nasbridge@\(clean(account.url?.host() ?? "webdav"))",
             "noappledouble",      // 不產生 ._ 檔（WebDAV 上只會是垃圾）
-            "noapplexattr",       // 不轉送 com.apple.* 延伸屬性
+            // 不可加 noapplexattr：它讓核心以 EPERM 拒絕 com.apple.* 延伸屬性，而 macOS 新檔案幾乎都帶
+            // com.apple.provenance／quarantine，Finder 拷貝會因此整個失敗。延伸屬性改由 FuseHost 的
+            // VolatileXattrStore 接住（只存在記憶體）。
             "iosize=1048576",     // 與讀取區塊大小一致，減少請求數
             "daemon_timeout=120", // 慢速網路上大檔上傳（release 時）可能較久
         ]

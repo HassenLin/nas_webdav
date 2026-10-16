@@ -123,3 +123,39 @@ import Testing
         #expect(c.attributes("/missing") == .some(nil))
     }
 }
+
+@Suite struct XattrStoreTests {
+    @Test func setGetListRemoveWithFlags() throws {
+        let s = VolatileXattrStore()
+        try s.set("/f", "com.apple.provenance", Data([1, 2]), flags: 0, position: 0)
+        #expect(try s.get("/f", "com.apple.provenance") == Data([1, 2]))
+        #expect(throws: DAVError.self) { try s.set("/f", "com.apple.provenance", Data(), flags: XATTR_CREATE, position: 0) }
+        #expect(throws: DAVError.self) { try s.set("/f", "x", Data(), flags: XATTR_REPLACE, position: 0) }
+        try s.set("/f", "a", Data([9]), flags: 0, position: 0)
+        #expect(s.names("/f") == ["a", "com.apple.provenance"])
+        try s.remove("/f", "a")
+        #expect(throws: DAVError.self) { try s.get("/f", "a") }
+    }
+
+    @Test func positionWritesExtendValue() throws {
+        let s = VolatileXattrStore()
+        try s.set("/f", "com.apple.ResourceFork", Data([1, 2]), flags: 0, position: 0)
+        try s.set("/f", "com.apple.ResourceFork", Data([7]), flags: 0, position: 4)
+        #expect(try s.get("/f", "com.apple.ResourceFork") == Data([1, 2, 0, 0, 7]))
+        #expect(throws: DAVError.self) {
+            try s.set("/f", "big", Data(count: 1), flags: 0, position: UInt32(VolatileXattrStore.maxValueSize))
+        }
+    }
+
+    @Test func renameMovesSubtreeAndDropClears() throws {
+        let s = VolatileXattrStore()
+        try s.set("/d/f", "a", Data([1]), flags: 0, position: 0)
+        try s.set("/dx", "b", Data([2]), flags: 0, position: 0)
+        s.rename("/d", to: "/e")
+        #expect(try s.get("/e/f", "a") == Data([1]))
+        #expect(s.names("/d/f").isEmpty)
+        #expect(s.names("/dx") == ["b"])          // 前綴相同但不是子樹，不受影響
+        s.drop("/e")
+        #expect(s.names("/e/f").isEmpty)
+    }
+}

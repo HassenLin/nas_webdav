@@ -10,7 +10,7 @@ INC=/usr/local/include/fuse
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-FIELDS="getattr mkdir unlink rmdir rename chmod chown truncate open read write statfs flush release fsync readdir init destroy create ftruncate fgetattr utimens"
+FIELDS="getattr mkdir unlink rmdir rename chmod chown truncate open read write statfs flush release fsync setxattr getxattr listxattr removexattr readdir init destroy create ftruncate fgetattr utimens"
 
 gen() {   # gen <include 行> <輸出名>
     {

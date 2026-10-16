@@ -20,6 +20,7 @@
 | 讀取 | HTTP Range GET，1 MiB 區塊快取，不先下載整檔（webdavfs 做法） |
 | 寫入 | 掛載時以隱藏探測檔**實際試寫**：支援部分寫入（Apache `PUT Content-Range`／SabreDAV `PATCH`）就直接寫遠端（連續寫入合併到 4 MiB 才送出）；不支援則退回「本機暫存檔＋關檔時整檔 PUT」 |
 | 檔案操作 | 建立、刪除、改名（MOVE）、mkdir、rmdir（非空目錄回 ENOTEMPTY）、truncate、statfs（RFC 4331 配額） |
+| 延伸屬性 | Finder／cp 拷貝時的 `com.apple.*` 等屬性暫存於記憶體（不寫到 NAS，卸載後消失），讓拷貝不因屬性失敗 |
 | 快取 | 屬性／目錄列表 5 秒 TTL、不存在 2 秒負向快取；本機變更即時失效 |
 
 ## 安裝
@@ -51,7 +52,7 @@ Sources/NASBridgeCore/        L1：零 UI 相依，可 swift test
                               KeychainStore（網際網路密碼）
   WebDAV/                     WebDAVClient（同步 API、部分寫入探測）、MultistatusParser、TLSTrustDelegate（釘選）、DAVError（errno）
   FS/                         POSIXFileSystem（FUSE 唯一依賴的抽象）、WebDAVFileSystem、OpenFile、MetadataCache
-  Fuse/                       FuseLibrary（dlopen macFUSE／FUSE-T）、FuseHost（C callback 膠水）
+  Fuse/                       FuseLibrary（dlopen macFUSE／FUSE-T）、FuseHost（C callback 膠水）、VolatileXattrStore
   Worker/                     WorkerProtocol（stdin 設定、stdout 事件行）、WorkerMain（子行程進入點）
   Mount/                      MountInstance（FSM＋worker 管理）、MountManager（協調者）、ConnectionTester、MountTable
   Setup/                      MacFUSEInstaller（下載／驗證／開啟安裝程式、Homebrew）
@@ -70,8 +71,9 @@ tools/                        install.sh、make-app.sh、make-icon.swift、AppIc
 
 ## 狀態
 
-- `swift build` 零警告（Swift 6 嚴格併發）；`swift test` 20/20（含實際下載 macFUSE 5.4.0、校驗碼與簽章驗證）；WebDAV 實機測試待提供帳密。
+- `swift build` 零警告（Swift 6 嚴格併發）；`swift test` 23/23（含實際下載 macFUSE 5.4.0、校驗碼與簽章驗證）；WebDAV 實機測試待提供帳密。
 - app 可組出並啟動；未安裝 macFUSE 時啟動即自動跳出安裝對話框。
-- **待驗證**：macFUSE 安裝後的實際掛載、`check-fuse-abi.sh`、對 `https://www.hassen.myds.me:9001/public` 的實機測試。
+- macFUSE 5.4.0 實機：`check-fuse-abi.sh` 29 項一致；掛載 `https://www.hassen.myds.me:9001/public` 後瀏覽、刪除、`cp`／`ditto` 上傳（含延伸屬性）、改名皆正常。
+- **待驗證**：Finder 拖放上傳大檔、WebDAV 實機測試套件（`--filter Live`）。
 
 設計取捨見 [`BACKGROUND.md`](BACKGROUND.md)，更動紀錄見 [`LOG.md`](LOG.md)。

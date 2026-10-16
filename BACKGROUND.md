@@ -23,7 +23,8 @@
 | 寫入合併 | 連續寫入累積至 4 MiB 才送出 | 核心以 64 KiB～1 MiB 為單位 write，逐次送 HTTP 會極慢 |
 | 屬性快取 | 5 秒 TTL＋2 秒負向快取 | Finder 會大量 getattr 與探測不存在的檔案；代價是他人變更最多延遲 5 秒 |
 | 權限／時間戳 | 固定 0755／0644、擁有者為目前使用者；chmod/chown/utimens 回報成功但不動作 | WebDAV 無此概念；回錯誤會讓 cp／Finder 拷貝失敗 |
-| AppleDouble | `noappledouble`、`noapplexattr` | 不在 NAS 上留下 `._*` 垃圾檔 |
+| AppleDouble | `noappledouble` | 不在 NAS 上留下 `._*` 垃圾檔 |
+| 延伸屬性（xattr） | 存在 worker 記憶體（`VolatileXattrStore`），不寫到 NAS、卸載即消失；**不可**用 `noapplexattr` | macOS 新檔案幾乎都帶 `com.apple.provenance`／`quarantine`；`noapplexattr` 讓核心以 EPERM 拒絕，Finder／cp 拷貝因此整個失敗（實測） |
 | 認證 | 預先帶 Basic header（僅 HTTPS），Digest 由 URLSession challenge 處理 | Synology 為 Basic；省去每個請求的 401 往返 |
 | 憑證 | 系統信任鏈，或釘選葉憑證 SHA-256 | Synology 常用自簽憑證；釘選比「忽略憑證錯誤」安全 |
 | 掛載點 | 預設 `~/Volumes/<名稱>` | 一般使用者無權在 `/Volumes` 建立資料夾 |

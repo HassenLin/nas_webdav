@@ -63,10 +63,11 @@ struct fuse_operations {
     int (*flush)(const char *, struct fuse_file_info *);
     int (*release)(const char *, struct fuse_file_info *);
     int (*fsync)(const char *, int, struct fuse_file_info *);
-    void *setxattr;                 // Darwin：(path, name, value, size, flags, position)
-    void *getxattr;                 // Darwin：(path, name, value, size, position)
-    void *listxattr;
-    void *removexattr;
+    // Darwin 版 xattr 多一個 position 參數（資源分支 com.apple.ResourceFork 的位移）
+    int (*setxattr)(const char *, const char *, const char *, size_t, int, uint32_t);
+    int (*getxattr)(const char *, const char *, char *, size_t, uint32_t);
+    int (*listxattr)(const char *, char *, size_t);
+    int (*removexattr)(const char *, const char *);
     void *opendir;
     int (*readdir)(const char *, void *, fuse_fill_dir_t, off_t, struct fuse_file_info *);
     void *releasedir;

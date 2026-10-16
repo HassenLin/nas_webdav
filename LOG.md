@@ -1,5 +1,13 @@
 # LOG
 
+- 2026-10-17｜**修正：無法上傳檔案**
+  - 原因：掛載選項 `noapplexattr` 讓核心以 EPERM 拒絕 `com.apple.*` 延伸屬性，而 macOS 新檔案幾乎都帶
+    `com.apple.provenance`，Finder／cp 拷貝因寫不進屬性而失敗（資料本身其實已寫入）。
+  - 修正：移除 `noapplexattr`；實作 setxattr/getxattr/listxattr/removexattr，屬性存在 worker 記憶體
+    （`VolatileXattrStore`，支援 XATTR_CREATE/REPLACE 與資源分支 position，單值上限 1 MiB；刪除／改名同步處理）。
+  - CFuseShim.h 補上 Darwin 版 xattr 函式指標；`check-fuse-abi.sh` 對 macFUSE 5.4.0 標頭 29 項一致。
+  - 實機：cp／ditto 上傳 3 MB 檔（含延伸屬性）成功、內容一致；測試 23 項通過。
+
 - 2026-10-17｜**帳號管理與 macFUSE 安裝對話框**
   - 模型拆分：`Account`（網址／帳號／鑰匙圈密碼／憑證釘選）與 `MountProfile`（帳號＋遠端路徑→掛載點）；設定檔改為 `config.json`（舊 `profiles.json` 不再讀取）。
   - 鑰匙圈改用網際網路密碼（伺服器＋埠＋帳號）；改網址或帳號時搬移密碼；使用中的帳號不可刪除。

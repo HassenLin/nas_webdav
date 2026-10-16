@@ -13,6 +13,7 @@ import os
 public enum FuseHost {
     nonisolated(unsafe) private static var fs: (any POSIXFileSystem)!
     nonisolated(unsafe) private static var onMounted: (@Sendable () -> Void)?
+    private static let xattrs = VolatileXattrStore()
     private static let log = Logger(subsystem: "idv.hassen.nasbridge", category: "fuse")
 
     /// 掛載並進入 FUSE 事件迴圈；卸載（umount、Finder 退出、SIGTERM）後返回 libfuse 的結束碼。
@@ -127,13 +128,54 @@ public enum FuseHost {
             FuseHost.call(path) { p in try FuseHost.fs.mkdir(p); return 0 }
         }
         ops.unlink = { path in
-            FuseHost.call(path) { p in try FuseHost.fs.unlink(p); return 0 }
+            FuseHost.call(path) { p in try FuseHost.fs.unlink(p); FuseHost.xattrs.drop(p); return 0 }
         }
         ops.rmdir = { path in
-            FuseHost.call(path) { p in try FuseHost.fs.rmdir(p); return 0 }
+            FuseHost.call(path) { p in try FuseHost.fs.rmdir(p); FuseHost.xattrs.drop(p); return 0 }
         }
         ops.rename = { from, to in
-            FuseHost.call(from) { p in try FuseHost.fs.rename(p, to: String(cString: to!)); return 0 }
+            FuseHost.call(from) { p in
+                let dest = String(cString: to!)
+                try FuseHost.fs.rename(p, to: dest)
+                FuseHost.xattrs.rename(p, to: dest)
+                return 0
+            }
+        }
+
+        // 延伸屬性：只存在記憶體（見 VolatileXattrStore）。唯讀掛載時核心會先擋下 set/remove。
+        ops.setxattr = { path, name, value, size, flags, position in
+            FuseHost.call(path) { p in
+                let data = size > 0 ? Data(bytes: value!, count: size) : Data()
+                try FuseHost.xattrs.set(p, String(cString: name!), data, flags: flags, position: position)
+                return 0
+            }
+        }
+        ops.getxattr = { path, name, value, size, position in
+            FuseHost.call(path, quiet: true) { p in
+                let data = try FuseHost.xattrs.get(p, String(cString: name!))
+                let start = min(Int(position), data.count)
+                let available = data.count - start
+                if size == 0 { return Int32(available) }                 // 只詢問長度
+                guard size >= available else { throw DAVError.posix(ERANGE) }
+                data.subdata(in: start..<data.count).copyBytes(
+                    to: UnsafeMutableRawPointer(value!).assumingMemoryBound(to: UInt8.self), count: available)
+                return Int32(available)
+            }
+        }
+        ops.listxattr = { path, list, size in
+            FuseHost.call(path) { p in
+                // 格式：每個名稱以 NUL 結尾後串接
+                let bytes = FuseHost.xattrs.names(p).reduce(into: [UInt8]()) { $0 += Array($1.utf8); $0.append(0) }
+                if size == 0 { return Int32(bytes.count) }
+                guard size >= bytes.count else { throw DAVError.posix(ERANGE) }
+                bytes.withUnsafeBufferPointer { buf in
+                    UnsafeMutableRawPointer(list!).copyMemory(from: buf.baseAddress!, byteCount: buf.count)
+                }
+                return Int32(bytes.count)
+            }
+        }
+        ops.removexattr = { path, name in
+            FuseHost.call(path, quiet: true) { p in try FuseHost.xattrs.remove(p, String(cString: name!)); return 0 }
         }
 
         // WebDAV 沒有權限／擁有者／時間戳可設定：回報成功，讓 cp、Finder 拷貝不因此失敗。
@@ -146,13 +188,15 @@ public enum FuseHost {
 
     // MARK: - 共用
 
-    /// 執行 callback 本體並把錯誤轉成 `-errno`。ENOENT 是 Finder 探測的常態，不記錄。
-    private static func call(_ path: UnsafePointer<CChar>?, _ body: (String) throws -> Int32) -> Int32 {
+    /// 執行 callback 本體並把錯誤轉成 `-errno`。ENOENT 是 Finder 探測的常態，不記錄；
+    /// quiet 用於 getxattr 等「查不到是常態」的操作。
+    private static func call(_ path: UnsafePointer<CChar>?, quiet: Bool = false,
+                             _ body: (String) throws -> Int32) -> Int32 {
         let p = path.map { String(cString: $0) } ?? "/"
         do {
             return try body(p)
         } catch let e as DAVError {
-            if e.code != ENOENT { log.error("\(p, privacy: .public): \(e.message, privacy: .public)") }
+            if !quiet, e.code != ENOENT { log.error("\(p, privacy: .public): \(e.message, privacy: .public)") }
             return -e.code
         } catch {
             log.error("\(p, privacy: .public): \(error.localizedDescription, privacy: .public)")
