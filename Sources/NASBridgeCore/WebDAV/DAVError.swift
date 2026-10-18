@@ -1,9 +1,19 @@
 import Foundation
 
-/// WebDAV 層唯一的錯誤型別：同時攜帶 POSIX errno（給 FUSE）與人類可讀訊息（給 UI / log）。
+/// 遠端層（各協定的 `RemoteStore`）與檔案系統層唯一的錯誤型別：
+/// 同時攜帶 POSIX errno（給 FUSE）與人類可讀訊息（給 UI / log）。名稱沿用最初只有 WebDAV 時的命名。
 public struct DAVError: Error, CustomStringConvertible, Sendable {
     public let code: Int32
     public let message: String
+    /// 伺服器憑證不受信任時看到的指紋；UI 可提供「信任此憑證」。
+    /// WebDAV 為葉憑證 SHA-256（hex）；FTPS 為 lftp 回報的 `AA:BB:…` 指紋。
+    public var untrustedFingerprint: String?
+
+    public init(code: Int32, message: String, untrustedFingerprint: String? = nil) {
+        self.code = code
+        self.message = message
+        self.untrustedFingerprint = untrustedFingerprint
+    }
 
     public var description: String { message }
 

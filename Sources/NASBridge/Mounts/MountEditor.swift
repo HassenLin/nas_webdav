@@ -38,7 +38,7 @@ struct MountEditor: View {
                     Picker("Account", selection: $mount.accountID) {
                         if account == nil { Text("Choose…").tag(mount.accountID) }
                         ForEach(manager.accounts) { a in
-                            Text(verbatim: "\(a.displayName) — \(a.username)").tag(a.id)
+                            Text(verbatim: "\(a.displayName) — \(a.protocolLabel)").tag(a.id)
                         }
                     }
                     Button("New Account…") { newAccount = AccountDraft(account: Account(), isNew: true) }
@@ -75,7 +75,7 @@ struct MountEditor: View {
                 Task { await manager.deleteMount(mount.id); onDeleted() }
             }
         } message: {
-            Text("The volume is unmounted. Files on the NAS are not affected.")
+            Text("The volume is unmounted. Files on the server are not affected.")
         }
     }
 
@@ -141,9 +141,9 @@ struct MountEditor: View {
         testing = true
         report = nil
         let (path, probe) = (mount.remotePath, !mount.readOnly)
-        let pw = KeychainStore.password(for: account) ?? ""
+        let secret = KeychainStore.secret(for: account) ?? ""
         Task {
-            report = await ConnectionTester.test(account, remotePath: path, password: pw, probeWrites: probe)
+            report = await ConnectionTester.test(account, remotePath: path, credential: secret, probeWrites: probe)
             testing = false
         }
     }

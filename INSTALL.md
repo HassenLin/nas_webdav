@@ -14,15 +14,30 @@ brew install --cask macfuse      # 安裝程式會要求管理者密碼
 
 替代（免核心延伸，實驗性）：`brew install --cask macos-fuse-t/cask/fuse-t`。
 
+## lftp（FTP／FTPS／SFTP 帳號需要，選用）
+
+```bash
+brew install lftp
+```
+
+只用 WebDAV、pCloud 可不裝。app 會找 `/opt/homebrew/bin`、`/usr/local/bin` 與 PATH。
+
+## pCloud（OAuth app 註冊，一次即可）
+
+1. 到 <https://docs.pcloud.com/my_apps/> 建立 app，取得 **Client ID／Client secret**。
+2. 在 app 的 Redirect URIs 加入 `http://127.0.0.1:53682/`（與 SmartphoneFileManager 相同，可共用同一個 pCloud app）。
+3. NAS Bridge：帳號 → 新增 → 協定選 pCloud → 填 Client ID／secret →「以 pCloud 登入…」，在瀏覽器同意。
+   地區（美國／歐洲）以登入回呼為準自動修正。
+
 ## 一鍵安裝（建議）
 
 ```bash
-./tools/install.sh                 # 缺 macFUSE 時詢問是否安裝
+./tools/install.sh                 # 缺 macFUSE／lftp 時詢問是否安裝
 ./tools/install.sh --yes           # 直接安裝 macFUSE、不詢問
 ./tools/install.sh --no-deps --skip-tests --dest ~/Applications
 ```
 
-腳本會：檢查 macOS／Xcode 工具鏈 → macFUSE → `swift test` → `make-app.sh release` →
+腳本會：檢查 macOS／Xcode 工具鏈 → macFUSE → lftp（選用） → `swift test` → `make-app.sh release` →
 安裝為 `/Applications/NAS Bridge.app`（無權限時改 `~/Applications`）。
 
 ## 手動
@@ -31,8 +46,13 @@ brew install --cask macfuse      # 安裝程式會要求管理者密碼
 ./tools/make-app.sh release        # 產物：.build/NASBridge.app
 ```
 
-- 首次開啟若被 Gatekeeper 擋：右鍵 → 打開（ad-hoc 簽章）。
-- Synology 端：「套件中心」安裝 **WebDAV Server**，啟用 HTTPS（預設埠 5006），帳號需有該共用資料夾權限。
+- 簽章：`make-app.sh` 自動挑鑰匙圈裡有效的 **Apple Development** 憑證（優先 team `34ZXLE998M`），找不到才 ad-hoc。
+  固定身分下，鑰匙圈（WebDAV／FTP／SFTP 密碼、pCloud token）的「允許」同意一次就一直有效；ad-hoc 每次 build
+  cdhash 都不同，重 build 後會再詢問。可用 `NB_SIGN_IDENTITY=<SHA-1 或名稱>`（`-`＝強制 ad-hoc）、
+  `NB_SIGN_TEAM=<Team ID>` 指定。不加 Hardened Runtime（會擋 dlopen 他人簽章的 libfuse）。
+- 首次開啟若被 Gatekeeper 擋：右鍵 → 打開。
+- Synology 端：「套件中心」安裝 **WebDAV Server**，啟用 HTTPS（預設埠 5006），帳號需有該共用資料夾權限；
+  FTP／SFTP：「控制台 → 檔案服務 → FTP」啟用 FTPS（explicit）或 SFTP。
 - 新增/修改 UI 字串後：在 `tools/zh-Hant.json` 補繁中翻譯，執行 `python3 tools/gen-strings.py`。
   擷取全部鍵：`swift build -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc <dir>`，
   再以 `--check <keys.json>` 檢查缺漏。

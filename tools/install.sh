@@ -4,11 +4,12 @@
 # 做的事（依序）：
 #   1. 檢查 macOS 版本（14+）與完整 Xcode 的 Swift toolchain（只有 Command Line Tools 不行，見 xcode-env.sh）
 #   2. 必要相依：macFUSE（Homebrew cask；安裝程式會要求管理者密碼，之後需在系統設定允許系統延伸並重新開機）
+#      選用相依：lftp（FTP／FTPS／SFTP 掛載需要；只用 WebDAV、pCloud 可不裝）
 #   3. 跑核心層單元測試（可略過）
 #   4. 以 release 組出 .app，安裝到 /Applications（無寫入權限時改 ~/Applications）
 #
 # 用法：
-#   ./tools/install.sh                 互動詢問是否安裝 macFUSE
+#   ./tools/install.sh                 互動詢問是否安裝 macFUSE、lftp
 #   ./tools/install.sh --yes           缺 macFUSE 時直接安裝、不詢問
 #   ./tools/install.sh --no-deps       不安裝相依（app 內有安裝導引）
 #   ./tools/install.sh --skip-tests    略過單元測試
@@ -64,6 +65,15 @@ elif command -v brew >/dev/null 2>&1 && ask "安裝 macFUSE（掛載需要；會
     warn "Apple 晶片需先在復原模式的「啟動安全性工具程式」開啟「降低安全性」以允許核心延伸。"
 else
     warn "未安裝 macFUSE：app 可啟動，但無法掛載；app 選單有安裝導引。https://macfuse.github.io"
+fi
+
+# lftp：FTP／FTPS／SFTP 帳號需要（選用）
+if command -v lftp >/dev/null 2>&1 || [ -x /opt/homebrew/bin/lftp ] || [ -x /usr/local/bin/lftp ]; then
+    info "lftp 已安裝（FTP／SFTP 可用）"
+elif command -v brew >/dev/null 2>&1 && ask "安裝 lftp（FTP／FTPS／SFTP 掛載需要；只用 WebDAV／pCloud 可略過）？"; then
+    brew install lftp
+else
+    warn "未安裝 lftp：WebDAV、pCloud 可用；FTP／SFTP 帳號需先 brew install lftp"
 fi
 
 # ── 3. 測試 ────────────────────────────────────────────────

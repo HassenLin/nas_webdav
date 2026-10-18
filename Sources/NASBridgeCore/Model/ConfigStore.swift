@@ -1,24 +1,37 @@
 import Foundation
 
 /// 帳號與掛載設定的持久化：`~/Library/Application Support/NASBridge/config.json`。
-/// 只負責讀寫，不含任何掛載邏輯；密碼不在此檔（鑰匙圈）。
+/// 只負責讀寫，不含任何掛載邏輯；密碼／token 不在此檔（鑰匙圈）。
 public struct AppConfig: Codable, Equatable, Sendable {
     public var accounts: [Account] = []
     public var mounts: [MountProfile] = []
+    /// pCloud OAuth app 的 client ID（使用者在 pCloud 自行註冊；secret 在鑰匙圈）
+    public var pcloudClientID = ""
 
-    public init(accounts: [Account] = [], mounts: [MountProfile] = []) {
+    public init(accounts: [Account] = [], mounts: [MountProfile] = [], pcloudClientID: String = "") {
         self.accounts = accounts
         self.mounts = mounts
+        self.pcloudClientID = pcloudClientID
+    }
+
+    // 逐欄 decodeIfPresent：舊版 config.json 沒有新欄位也能讀
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accounts = try c.decodeIfPresent([Account].self, forKey: .accounts) ?? []
+        mounts = try c.decodeIfPresent([MountProfile].self, forKey: .mounts) ?? []
+        pcloudClientID = try c.decodeIfPresent(String.self, forKey: .pcloudClientID) ?? ""
     }
 }
 
 public enum ConfigStore {
-    public static var fileURL: URL {
+    public static var directory: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NASBridge", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("config.json")
+        return dir
     }
+
+    public static var fileURL: URL { directory.appendingPathComponent("config.json") }
 
     public static func load(from url: URL = fileURL) -> AppConfig {
         guard let data = try? Data(contentsOf: url) else { return AppConfig() }

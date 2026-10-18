@@ -23,8 +23,8 @@ public struct FileAttributes: Sendable, Equatable {
 ///   - 會被多條 FUSE 執行緒並行呼叫，實作必須執行緒安全。
 ///   - handle 由 `open`/`create` 發出，直到 `release` 前有效。
 ///
-/// 這層把「WebDAV 是什麼」完全藏起來：要換成別的遠端協定（SMB、S3…）只需另一個實作，
-/// FuseHost 與 worker 不用改。
+/// 唯一實作是 `RemoteFileSystem`（POSIX 語意），協定差異再往下藏在 `RemoteStore`（WebDAV／FTP／SFTP／pCloud）；
+/// 新增協定（SMB、S3…）只需另一個 `RemoteStore`，FuseHost 與 worker 不用改。
 public protocol POSIXFileSystem: AnyObject, Sendable {
     var isReadOnly: Bool { get }
 

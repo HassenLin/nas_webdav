@@ -11,6 +11,8 @@ import Observation
 public final class MountManager {
     public private(set) var accounts: [Account]
     public private(set) var mounts: [MountProfile]
+    /// pCloud OAuth app 的 client ID（secret 在鑰匙圈：`KeychainStore.pcloudClientSecret`）
+    public private(set) var pcloudClientID: String
     public private(set) var fuse: FuseLibrary.Installation?
     @ObservationIgnored private var instances: [UUID: MountInstance] = [:]
     @ObservationIgnored private let workerURL: URL
@@ -24,6 +26,7 @@ public final class MountManager {
         let config = ConfigStore.load(from: configURL)
         self.accounts = config.accounts
         self.mounts = config.mounts
+        self.pcloudClientID = config.pcloudClientID
         self.fuse = FuseLibrary.detect()
     }
 
@@ -48,26 +51,28 @@ public final class MountManager {
         return fuse != nil
     }
 
-    private func persist(accounts: [Account]? = nil, mounts: [MountProfile]? = nil) throws {
-        let config = AppConfig(accounts: accounts ?? self.accounts, mounts: mounts ?? self.mounts)
+    private func persist(accounts: [Account]? = nil, mounts: [MountProfile]? = nil, pcloudClientID: String? = nil) throws {
+        let config = AppConfig(accounts: accounts ?? self.accounts, mounts: mounts ?? self.mounts,
+                               pcloudClientID: pcloudClientID ?? self.pcloudClientID)
         try ConfigStore.save(config, to: configURL)
         self.accounts = config.accounts
         self.mounts = config.mounts
+        self.pcloudClientID = config.pcloudClientID
     }
 
     // MARK: - 帳號
 
-    /// 新增或更新帳號；password 為 nil 表示不變更鑰匙圈中的密碼。
-    /// 伺服器或使用者名稱變更時，鑰匙圈項目的鍵也跟著變，舊密碼會搬到新鍵。
-    public func saveAccount(_ account: Account, password: String?) throws {
+    /// 新增或更新帳號；secret（密碼或 pCloud token）為 nil 表示不變更鑰匙圈中的值。
+    /// 伺服器、協定或使用者名稱變更時，鑰匙圈項目的鍵也跟著變，舊密碼會搬到新鍵。
+    public func saveAccount(_ account: Account, secret: String?) throws {
         if let msg = account.validationError() { throw DAVError.posix(EINVAL, msg) }
         let old = self.account(account.id)
-        let keyChanged = old.map { $0.url != account.url || $0.username != account.username } ?? false
-        let pw = password ?? (keyChanged ? old.flatMap(KeychainStore.password(for:)) : nil)
-        if let pw, !KeychainStore.setPassword(pw, for: account) {
+        let keyChanged = old.map { !KeychainStore.sameItem($0, account) } ?? false
+        let value = secret ?? (keyChanged ? old.flatMap(KeychainStore.secret(for:)) : nil)
+        if let value, !KeychainStore.setSecret(value, for: account) {
             throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
         }
-        if keyChanged, let old, !accounts.contains(where: { $0.id != old.id && $0.url == old.url && $0.username == old.username }) {
+        if keyChanged, let old, !accounts.contains(where: { $0.id != old.id && KeychainStore.sameItem($0, old) }) {
             KeychainStore.delete(for: old)
         }
         var next = accounts
@@ -75,7 +80,7 @@ public final class MountManager {
         try persist(accounts: next)
     }
 
-    /// 刪除帳號（含鑰匙圈密碼）。仍有掛載使用時拒絕，避免留下無帳號的掛載。
+    /// 刪除帳號（含鑰匙圈密碼／token）。仍有掛載使用時拒絕，避免留下無帳號的掛載。
     public func deleteAccount(_ id: UUID) throws {
         guard let account = account(id) else { return }
         let users = mounts(using: id)
@@ -83,9 +88,17 @@ public final class MountManager {
             throw DAVError.posix(EBUSY, "Used by: \(users.map(\.name).joined(separator: ", ")). Delete those mounts first.")
         }
         try persist(accounts: accounts.filter { $0.id != id })
-        if !accounts.contains(where: { $0.url == account.url && $0.username == account.username }) {
+        if !accounts.contains(where: { KeychainStore.sameItem($0, account) }) {
             KeychainStore.delete(for: account)
         }
+    }
+
+    /// pCloud OAuth app 設定（所有 pCloud 帳號共用）；secret 為 nil 表示不變更。
+    public func savePCloudApp(clientID: String, secret: String?) throws {
+        if let secret, !KeychainStore.setPCloudClientSecret(secret) {
+            throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
+        }
+        try persist(pcloudClientID: clientID.trimmingCharacters(in: .whitespaces))
     }
 
     // MARK: - 掛載設定
@@ -117,8 +130,8 @@ public final class MountManager {
     public func mount(_ id: UUID) async -> Bool {
         guard refreshFUSE() else { return false }
         guard let m = mountProfile(id), let account = account(m.accountID) else { return true }
-        let password = KeychainStore.password(for: account) ?? ""
-        await instance(for: id).mount(WorkerConfig(account: account, mount: m, password: password))
+        let credential = KeychainStore.secret(for: account) ?? ""
+        await instance(for: id).mount(WorkerConfig(account: account, mount: m, credential: credential))
         return true
     }
 

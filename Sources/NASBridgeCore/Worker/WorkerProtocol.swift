@@ -4,7 +4,7 @@ import Foundation
 ///
 /// - 啟動：`<執行檔> --fuse-worker`
 /// - 主 app → worker：stdin 寫入一份 `WorkerConfig` JSON 後關閉。
-///   密碼走 stdin 而非參數或環境變數：`ps` 看不到，且 worker 不必再碰鑰匙圈。
+///   密碼／token 走 stdin 而非參數或環境變數：`ps` 看不到，且 worker 不必再碰鑰匙圈。
 /// - worker → 主 app：stdout 逐行事件（`WorkerEvent`），其餘診斷訊息走 stderr / os.Logger。
 /// - 結束：worker 行程結束＝已卸載。結束碼 0 為正常卸載。
 public enum WorkerProtocol {
@@ -14,12 +14,13 @@ public enum WorkerProtocol {
 public struct WorkerConfig: Codable, Sendable {
     public var account: Account
     public var mount: MountProfile
-    public var password: String
+    /// 密碼（WebDAV／FTP／SFTP）或 access token（pCloud）
+    public var credential: String
 
-    public init(account: Account, mount: MountProfile, password: String) {
+    public init(account: Account, mount: MountProfile, credential: String) {
         self.account = account
         self.mount = mount
-        self.password = password
+        self.credential = credential
     }
 }
 

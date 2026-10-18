@@ -5,7 +5,7 @@
 #   - Info.plist（LSUIElement：只在選單列，不出現在 Dock）
 #   - 多語系字串（Localization/*.lproj → Contents/Resources/）
 #   - 圖示（tools/AppIcon.icns）
-#   - ad-hoc 簽章
+#   - 簽章：優先用鑰匙圈裡有效的 Apple Development 憑證（固定身分），找不到才 ad-hoc
 #
 # 用法：./tools/make-app.sh [debug|release]   產物：.build/NASBridge.app
 set -euo pipefail
@@ -70,7 +70,27 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# 本機自簽（ad-hoc）。不上架，Developer ID 等真的要散佈時再說。
-codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+# 簽章身分：鑰匙圈項目（帳號密碼）的存取權限綁在 app 的簽章上。
+# ad-hoc 簽章每次 build 的 cdhash 都不同，macOS 視為另一個 app，每次重 build 都要重新「允許」；
+# 用固定的 Apple Development 憑證簽，權限綁在「bundle id＋憑證」上，同意一次就一直有效。
+#   NB_SIGN_IDENTITY  指定身分（SHA-1 或名稱；"-"＝強制 ad-hoc）
+#   NB_SIGN_TEAM      未指定身分時優先挑這個 team 的憑證（預設 34ZXLE998M），沒有就挑任一有效的
+# 不上架、不公證；真的要散佈時再改 Developer ID。
+# 不加 --options runtime：Hardened Runtime 的 library validation 會拒絕 dlopen 他人簽章的 libfuse。
+pick_identity() {
+    # find-identity -v 仍會列出已撤銷的憑證（標 CSSMERR_TP_CERT_REVOKED），要濾掉
+    local valid
+    valid="$(security find-identity -v -p codesigning 2>/dev/null | grep '"Apple Development:' | grep -v CSSMERR || true)"
+    { grep "(${NB_SIGN_TEAM:-34ZXLE998M})\"" <<<"$valid" || true; echo "$valid"; } | awk 'NF && !found { print $2; found = 1 }'   # 不用 exit：提早關管線會 SIGPIPE，pipefail 下整支腳本中止
+}
+IDENTITY="${NB_SIGN_IDENTITY:-$(pick_identity)}"
+IDENTITY="${IDENTITY:--}"
+# --timestamp=none：離線也能簽。
+if [ "$IDENTITY" != "-" ] && codesign --force --timestamp=none --sign "$IDENTITY" "$APP" >/dev/null 2>&1; then
+    echo "簽章：$(codesign -dv --verbose=2 "$APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+else
+    codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+    echo "簽章：ad-hoc（找不到可用的 Apple Development 憑證；重新 build 後鑰匙圈會再詢問權限）"
+fi
 
 echo "已組出 $APP"

@@ -1,5 +1,32 @@
 # LOG
 
+- 2026-10-18｜**FTP／FTPS／SFTP 改用續傳機制做 offset 讀寫（FUSE driver 層）**
+  - 讀：`get1 --source-region`（FTP `REST`＋`RETR`、SFTP offset），4 MiB 區塊，不再開檔整檔下載；區段跨過檔尾時接受 lftp 已寫入的部分。
+  - 寫：新增寫入方式 `PartialWriteMethod.append`：`put -c` 從遠端大小接續（FTP `REST`＋`STOR`、SFTP offset），本機以稀疏檔只送新段；
+    送出後比對大小。`RemoteFileSystem` 遇到非檔尾寫入時把 handle 單向轉為本機暫存檔（`convertToLocal`）。
+  - 掛載時以探測檔實測（"ABCD" → 接續 "EF" → 讀 [1,3)），不支援的伺服器退回整檔；唯讀掛載假設 REST 讀可用。
+  - `RemoteStore.readChunkSize`（預設 1 MiB，lftp 4 MiB）。
+  - 測試 42 項通過（FakeStore 模擬「只能接在檔尾」）；實機 FTP／FTPS／SFTP 皆探測為 Range 讀＋接續寫並通過；
+    FUSE 實掛 FTP：20 MiB 拷貝為 5 次 4 MiB 接續 STOR、讀中段只傳該區塊、改寫轉本機內容正確。
+
+- 2026-10-18｜**新增 FTP／FTPS／SFTP、pCloud；固定憑證簽章；README 參考來源**
+  - 架構：`WebDAVFileSystem` 一般化為 `RemoteFileSystem`（POSIX 語意只寫一次），協定差異降到 `RemoteStore` 契約
+    （能力旗標：Range 讀、部分寫入、rename 是否覆蓋）；`RemoteStoreFactory` 為協定 → 實作的唯一對應，worker 與「測試連線」共用。
+  - WebDAV：`WebDAVStore` 薄轉接層（行為不變）。
+  - FTP／FTPS（explicit／implicit、被動／主動）、SFTP（密碼／私鑰）：移植 SmartphoneFileManager 的 lftp 指令組裝與列表解析，
+    改為**常駐 lftp 行程＋3 條連線池**；FTPS 限 TLS 1.2、上傳後比對大小；可信任自簽憑證指紋；SFTP 主機金鑰 TOFU（app 專用 known_hosts）。
+    修正：掛載根原本不實際連線就回報成功，改以 `cd` 驗證（實機測試時發現）。
+  - pCloud（美國／歐洲）：同步 JSON API、`getfilelink`＋Range 讀、整檔上傳、帳號配額；OAuth2 loopback 登入（移植）。
+  - 模型：`Account` 加 `protocol` 與協定專屬欄位（舊 config.json 逐欄相容讀取）；鑰匙圈鍵含協定，pCloud token 以帳號 id 為鍵；
+    `AppConfig.pcloudClientID`；`WorkerConfig.password` → `credential`。
+  - UI：帳號編輯器協定切換與各協定欄位、pCloud 登入與 app 設定、純 FTP 未加密警告；帳號表格加「協定」「伺服器」欄。
+  - `make-app.sh`：優先以鑰匙圈裡有效的 Apple Development 憑證簽章（`NB_SIGN_IDENTITY`／`NB_SIGN_TEAM`），找不到才 ad-hoc，
+    鑰匙圈「允許」同意一次即持續有效。`install.sh` 加選用的 lftp。
+  - 多語系：補 37 筆繁中；簡中轉換補「伺服器／登入／憑證／金鑰」用語（順帶修正既有的「伺服器網址」「登入時啟動」）。
+  - README 新增「參考來源」（miquels/webdavfs、SmartphoneFileManager、macFUSE、lftp、pCloud API）。
+  - 測試 41 項通過（新增 FakeStore 四種能力組合、lftp、pCloud、模型相容）；實機 FTP／FTPS／SFTP 通過、FTP 實際 FUSE 掛載讀寫正常；
+    pCloud 實機待驗證。
+
 - 2026-10-17｜**修正：無法上傳檔案**
   - 原因：掛載選項 `noapplexattr` 讓核心以 EPERM 拒絕 `com.apple.*` 延伸屬性，而 macOS 新檔案幾乎都帶
     `com.apple.provenance`，Finder／cp 拷貝因寫不進屬性而失敗（資料本身其實已寫入）。

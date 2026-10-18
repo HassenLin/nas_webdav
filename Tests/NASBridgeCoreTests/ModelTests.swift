@@ -59,13 +59,13 @@ import Testing
         #expect(ConfigStore.load(from: url) == config)
     }
 
-    /// 被掛載使用中的帳號不能刪；掛載不能指向不存在的帳號。（不碰鑰匙圈：password 傳 nil）
+    /// 被掛載使用中的帳號不能刪；掛載不能指向不存在的帳號。（不碰鑰匙圈：secret 傳 nil）
     @MainActor @Test func managerRefusesDanglingReferences() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("nb-config-\(UUID()).json")
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = MountManager(configURL: url)
         let a = account("https://nas:5006")
-        try manager.saveAccount(a, password: nil)
+        try manager.saveAccount(a, secret: nil)
         #expect(throws: DAVError.self) { try manager.saveMount(MountProfile(accountID: UUID())) }
         try manager.saveMount(MountProfile(accountID: a.id))
         #expect(throws: DAVError.self) { try manager.deleteAccount(a.id) }

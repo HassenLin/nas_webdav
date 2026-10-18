@@ -4,42 +4,36 @@ import Foundation
 public struct ConnectionReport: Sendable, Equatable {
     public var ok: Bool
     public var message: String
-    /// 憑證不受信任時，伺服器憑證的 SHA-256；UI 可提供「信任此憑證」把它釘選起來。
+    /// 憑證不受信任時看到的指紋（WebDAV：SHA-256；FTPS：lftp 回報的指紋）；UI 可提供「信任此憑證」。
     public var untrustedFingerprint: String?
 }
 
-/// 對帳號（＋遠端路徑）做一次不掛載的連線檢查：認證、遠端路徑、配額、（選擇性）部分寫入能力。
+/// 對帳號（＋遠端路徑）做一次不掛載的連線檢查：認證、遠端路徑、配額、（選擇性）寫入方式。
+/// 與 worker 走同一條 `RemoteStoreFactory.connect`，測試通過＝掛載時的連線步驟也會通過。
 public enum ConnectionTester {
-    /// - Parameter probeWrites: 是否探測部分寫入（會在遠端建立並刪除一個隱藏檔）。
-    public static func test(_ account: Account, remotePath: String = "/", password: String,
+    /// - Parameter credential: 密碼（WebDAV／FTP／SFTP）或 access token（pCloud）。
+    /// - Parameter probeWrites: 是否探測部分寫入（WebDAV 會在遠端建立並刪除一個隱藏檔）。
+    public static func test(_ account: Account, remotePath: String = "/", credential: String,
                             probeWrites: Bool = false) async -> ConnectionReport {
         if let msg = account.validationError() { return ConnectionReport(ok: false, message: msg) }
-        // WebDAVClient 是阻塞式 API，離開 main actor 執行
-        return await Task.detached { run(account, remotePath, password, probeWrites) }.value
+        // RemoteStore 是阻塞式 API，離開 main actor 執行
+        return await Task.detached { run(account, remotePath, credential, probeWrites) }.value
     }
 
-    private static func run(_ account: Account, _ remotePath: String, _ password: String, _ probeWrites: Bool) -> ConnectionReport {
-        guard let client = WebDAVClient(account: account, remotePath: remotePath, password: password, timeout: 15) else {
-            return ConnectionReport(ok: false, message: "Server URL is invalid.")
-        }
+    private static func run(_ account: Account, _ remotePath: String, _ credential: String, _ probeWrites: Bool) -> ConnectionReport {
         do {
-            guard let root = try client.propfind("/", depth: 0).first, root.isDirectory else {
-                return ConnectionReport(ok: false, message: "Remote path is not a folder.")
-            }
+            let store = try RemoteStoreFactory.connect(account, remotePath: remotePath, credential: credential,
+                                                       probeWrites: probeWrites, timeout: 15)
             var lines = ["Connected."]
-            if let q = try? client.quota(), let free = q.available {
+            if let q = try? store.quota(), let free = q.available {
                 lines.append("Free: " + ByteCountFormatter.string(fromByteCount: free, countStyle: .file))
             }
-            if probeWrites {
-                lines.append("Write mode: " + describe(client.probePartialWrite(in: "/")))
-            }
+            if !store.supportsRangeRead { lines.append("Read mode: whole file is downloaded on open") }
+            else if account.protocol.needsLftp { lines.append("Read mode: offset reads (REST + RETR / SFTP offset)") }
+            if probeWrites { lines.append("Write mode: " + describe(store.partialWrite)) }
             return ConnectionReport(ok: true, message: lines.joined(separator: "\n"))
         } catch let e as DAVError {
-            if client.trustRejected {
-                return ConnectionReport(ok: false, message: "The server certificate is not trusted.",
-                                        untrustedFingerprint: client.lastSeenFingerprint)
-            }
-            return ConnectionReport(ok: false, message: e.code == EACCES ? "Authentication failed. (\(e.message))" : e.message)
+            return ConnectionReport(ok: false, message: e.message, untrustedFingerprint: e.untrustedFingerprint)
         } catch {
             return ConnectionReport(ok: false, message: error.localizedDescription)
         }
@@ -49,6 +43,7 @@ public enum ConnectionTester {
         switch m {
         case .contentRange: "partial writes (Content-Range)"
         case .sabrePatch: "partial writes (SabreDAV PATCH)"
+        case .append: "append writes (REST + STOR / SFTP offset); rewrites use whole-file upload"
         case .none: "whole-file upload on close"
         }
     }

@@ -1,7 +1,7 @@
 import NASBridgeCore
 import SwiftUI
 
-/// 帳號管理：表格列出 名稱／伺服器網址／帳號／密碼（鑰匙圈）／使用中的掛載數。
+/// 帳號管理：表格列出 名稱／協定／伺服器／帳號／密碼（鑰匙圈）／使用中的掛載數。
 /// 雙擊或「編輯…」以表單編輯；被掛載使用中的帳號不能刪除。
 struct AccountsView: View {
     let manager: MountManager
@@ -14,7 +14,16 @@ struct AccountsView: View {
         VStack(spacing: 0) {
             Table(manager.accounts, selection: $state.selectedAccount) {
                 TableColumn("Name") { Text($0.displayName) }
-                TableColumn("Server URL") { Text($0.serverURL).textSelection(.enabled) }
+                TableColumn("Protocol") { a in
+                    HStack(spacing: 4) {
+                        Text(verbatim: a.protocolLabel)
+                        if !a.isEncrypted {
+                            Image(systemName: "exclamationmark.shield").foregroundStyle(.orange).help("Unencrypted")
+                        }
+                    }
+                }
+                .width(min: 70, ideal: 90)
+                TableColumn("Server") { Text(verbatim: $0.serverLabel).textSelection(.enabled) }
                 TableColumn("Username") { Text($0.username) }
                 TableColumn("Password") { PasswordCell(account: $0) }
                     .width(min: 140, ideal: 170)
@@ -34,7 +43,7 @@ struct AccountsView: View {
                     ContentUnavailableView {
                         Label("No Accounts", systemImage: "person.badge.key")
                     } description: {
-                        Text("Add the URL, username and password of your Synology WebDAV server. The password is stored in the keychain.")
+                        Text("Add a WebDAV, FTP, SFTP or pCloud account. Passwords and sign-ins are stored in the keychain.")
                     } actions: {
                         Button("Add Account") { add() }
                     }
@@ -91,11 +100,22 @@ struct AccountDraft: Identifiable {
 }
 
 /// 密碼欄：預設遮罩，按眼睛圖示才從鑰匙圈讀出顯示（可能觸發鑰匙圈授權提示）。
+/// pCloud 只顯示是否已登入（token 不顯示）；SFTP 私鑰登入顯示「私鑰」。
 private struct PasswordCell: View {
     let account: Account
     @State private var revealed: String??    // nil＝未讀取；.some(nil)＝鑰匙圈沒有
 
     var body: some View {
+        if account.protocol == .pcloud {
+            Text(KeychainStore.secret(for: account) == nil ? "Not signed in" : "Signed in")
+        } else if account.usesKeyAuth {
+            Text("Private key")
+        } else {
+            passwordView
+        }
+    }
+
+    private var passwordView: some View {
         HStack(spacing: 4) {
             switch revealed {
             case .none: Text(verbatim: "••••••••").foregroundStyle(.secondary)
@@ -104,7 +124,7 @@ private struct PasswordCell: View {
             }
             Spacer(minLength: 0)
             Button {
-                revealed = revealed == nil ? .some(KeychainStore.password(for: account)) : nil
+                revealed = revealed == nil ? .some(KeychainStore.secret(for: account)) : nil
             } label: {
                 Image(systemName: revealed == nil ? "eye" : "eye.slash")
             }

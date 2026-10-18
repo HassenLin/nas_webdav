@@ -15,15 +15,7 @@ public struct DAVQuota: Sendable, Equatable {
     public var used: Int64?
 }
 
-/// 伺服器支援的「部分寫入」方式（WebDAV 標準沒有定義，見 BACKGROUND.md）。
-public enum PartialWriteMethod: String, Sendable {
-    /// Apache mod_dav：`PUT` + `Content-Range: bytes a-b/*`
-    case contentRange
-    /// SabreDAV（Nextcloud 等）：`PATCH` + `X-Update-Range`
-    case sabrePatch
-    /// 不支援：寫入改走「本機暫存檔 + 關檔時整檔 PUT」
-    case none
-}
+// PartialWriteMethod 定義於 Remote/RemoteStore.swift（各協定共用）
 
 /// 同步（阻塞式）WebDAV 用戶端。
 ///
@@ -238,7 +230,7 @@ public final class WebDAVClient: @unchecked Sendable {
             let req = request("PATCH", path, headers: ["Content-Type": "application/x-sabredav-partialupdate",
                                                        "X-Update-Range": "bytes=\(range)"])
             try send(req, body: data, what: "PATCH \(path)")
-        case .none:
+        case .append, .none:   // .append 是 FTP／SFTP 的方式，WebDAV 探測不會選到
             throw DAVError.posix(ENOTSUP, "partial write not supported")
         }
     }

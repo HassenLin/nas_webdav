@@ -1,7 +1,14 @@
+import AppKit
 import NASBridgeCore
 import SwiftUI
 
-/// 帳號編輯表單（sheet）：網址、帳號、密碼（鑰匙圈）、憑證釘選、測試連線。
+/// 帳號編輯表單（sheet）：協定、伺服器、帳號、密碼（鑰匙圈）、協定專屬選項、測試連線。
+///
+/// 協定專屬欄位：
+///   - WebDAV：伺服器網址（可含路徑前綴）、憑證釘選（SHA-256）
+///   - FTP：加密（FTPS explicit／implicit／無）、資料通道（被動／主動）、FTPS 自簽憑證指紋
+///   - SFTP：密碼或私鑰登入
+///   - pCloud：地區、OAuth 登入（app 的 client ID／secret 所有 pCloud 帳號共用）
 struct AccountEditor: View {
     let manager: MountManager
     let isNew: Bool
@@ -11,6 +18,12 @@ struct AccountEditor: View {
     @State private var account: Account
     /// 空字串＝沿用鑰匙圈中的密碼
     @State private var password = ""
+    /// pCloud：這次登入取得、尚未存入鑰匙圈的 token
+    @State private var pcloudToken: String?
+    @State private var clientID: String
+    /// 空字串＝沿用鑰匙圈中的 client secret
+    @State private var clientSecret = ""
+    @State private var signingIn = false
     @State private var testing = false
     @State private var report: ConnectionReport?
     @State private var error: String?
@@ -20,27 +33,29 @@ struct AccountEditor: View {
         self.isNew = isNew
         self.onSaved = onSaved
         _account = State(initialValue: initial)
+        _clientID = State(initialValue: manager.pcloudClientID)
     }
+
+    private var proto: RemoteProtocol { account.protocol }
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section(isNew ? "New Account" : "Account") {
-                    TextField("Server URL", text: $account.serverURL, prompt: Text(verbatim: "https://nas.local:5006"))
-                    TextField("Username", text: $account.username)
-                    SecureField("Password", text: $password,
-                                prompt: Text(isNew ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
-                    TextField("Name", text: $account.name, prompt: Text(account.url?.host() ?? String(localized: "Optional")))
+                    Picker("Protocol", selection: Binding(get: { account.protocol }, set: { switchProtocol($0) })) {
+                        ForEach(RemoteProtocol.allCases) { Text(verbatim: $0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    serverFields
+                    TextField("Name", text: $account.name, prompt: Text(verbatim: account.displayName))
                 }
-                Section {
-                    TextField("Pinned certificate SHA-256", text: $account.pinnedCertSHA256,
-                              prompt: Text("Empty — use system trust"))
-                        .font(.system(.body, design: .monospaced))
-                } header: {
-                    Text("Security")
-                } footer: {
-                    Text("HTTPS only. Pin the certificate fingerprint when the NAS uses a self-signed certificate.")
-                        .font(.caption).foregroundStyle(.secondary)
+                if proto == .pcloud { pcloudSections }
+                securitySection
+                if proto.needsLftp, ToolLocator.lftp == nil {
+                    Section {
+                        Label("FTP and SFTP need lftp: brew install lftp", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange).textSelection(.enabled)
+                    }
                 }
                 if let report { Section("Connection Test") { reportView(report) } }
                 if let error {
@@ -50,53 +65,255 @@ struct AccountEditor: View {
             .formStyle(.grouped)
             Divider()
             HStack {
-                Button("Test Connection", action: test).disabled(testing)
+                Button("Test Connection", action: test).disabled(testing || signingIn)
                 if testing { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save", action: save).keyboardShortcut(.defaultAction)
+                Button("Save", action: save).keyboardShortcut(.defaultAction).disabled(signingIn)
             }
             .padding()
         }
-        .frame(width: 520, height: 470)
+        .frame(width: 560, height: 600)
+    }
+
+    // MARK: - 區塊
+
+    @ViewBuilder private var serverFields: some View {
+        switch proto {
+        case .webdav:
+            TextField("Server URL", text: $account.serverURL, prompt: Text(verbatim: "https://nas.local:5006"))
+        case .ftp, .sftp:
+            TextField("Server", text: $account.hostAndPort,
+                      prompt: Text(verbatim: proto == .ftp ? "nas.local  (nas.local:2121)" : "nas.local  (nas.local:2222)"))
+        case .pcloud:
+            Picker("Region", selection: $account.pcloudRegion) {
+                Text("United States").tag(PCloudRegion.us)
+                Text("Europe").tag(PCloudRegion.eu)
+            }
+        }
+        if proto == .ftp {
+            Picker("Encryption", selection: $account.ftpSecurity) {
+                Text("FTPS — explicit TLS").tag(FTPSecurity.explicit)
+                Text("FTPS — implicit TLS").tag(FTPSecurity.implicit)
+                Text("None (unencrypted)").tag(FTPSecurity.none)
+            }
+            Picker("Data connection", selection: $account.ftpMode) {
+                Text("Passive").tag(FTPMode.passive)
+                Text("Active").tag(FTPMode.active)
+            }
+            .pickerStyle(.segmented)
+        }
+        if proto != .pcloud {
+            TextField("Username", text: $account.username)
+        }
+        if proto == .sftp {
+            Picker("Sign in with", selection: Binding(get: { account.sftpKeyPath.isEmpty ? 0 : 1 },
+                                                      set: { account.sftpKeyPath = $0 == 0 ? "" : defaultKeyPath })) {
+                Text("Password").tag(0)
+                Text("Private key").tag(1)
+            }
+            .pickerStyle(.segmented)
+            if account.usesKeyAuth {
+                HStack {
+                    TextField("Private key", text: $account.sftpKeyPath, prompt: Text(verbatim: "~/.ssh/id_ed25519"))
+                    Button("Choose…", action: chooseKey)
+                }
+            }
+        }
+        if proto != .pcloud, !account.usesKeyAuth {
+            SecureField("Password", text: $password,
+                        prompt: Text(isNew ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
+        }
+    }
+
+    @ViewBuilder private var pcloudSections: some View {
+        Section("pCloud Sign-in") {
+            LabeledContent("Status") {
+                if pcloudToken != nil || (!isNew && KeychainStore.secret(for: account) != nil) {
+                    Text(account.username.isEmpty ? String(localized: "Signed in") : account.username)
+                } else {
+                    Text("Not signed in").foregroundStyle(.orange)
+                }
+            }
+            HStack {
+                Button("Sign in with pCloud…", action: signIn).disabled(signingIn)
+                if signingIn {
+                    ProgressView().controlSize(.small)
+                    Text("Finish signing in in your browser.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        Section {
+            TextField("Client ID", text: $clientID)
+            SecureField("Client secret", text: $clientSecret,
+                        prompt: Text(KeychainStore.pcloudClientSecret == nil ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
+            LabeledContent("Redirect URI") {
+                Text(verbatim: PCloudOAuth.redirectURI).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+            }
+        } header: {
+            Text("pCloud App")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Register an app at pCloud and add the redirect URI above. All pCloud accounts share this app.")
+                Link("Open pCloud My Apps", destination: PCloudOAuth.appsPage)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var securitySection: some View {
+        switch proto {
+        case .webdav:
+            Section {
+                TextField("Pinned certificate SHA-256", text: $account.pinnedCertSHA256,
+                          prompt: Text("Empty — use system trust"))
+                    .font(.system(.body, design: .monospaced))
+            } header: {
+                Text("Security")
+            } footer: {
+                Text("HTTPS only. Pin the certificate fingerprint when the NAS uses a self-signed certificate.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .ftp where account.ftpSecurity == .none:
+            Section("Security") {
+                Label("Unencrypted: the password and files are sent in plain text. Use FTPS when the server supports it.",
+                      systemImage: "exclamationmark.shield")
+                    .foregroundStyle(.orange)
+            }
+        case .ftp:
+            Section {
+                TextField("Trusted certificate fingerprint", text: $account.ftpsTrustedFingerprint,
+                          prompt: Text("Empty — use system trust"))
+                    .font(.system(.body, design: .monospaced))
+            } header: {
+                Text("Security")
+            } footer: {
+                Text("Filled in by “Trust This Certificate” when the server uses a self-signed certificate.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .sftp:
+            Section {
+                LabeledContent("Host key") { Text("Remembered on first connection") }
+            } header: {
+                Text("Security")
+            } footer: {
+                Text("If the server's host key changes later, the connection is refused.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .pcloud:
+            EmptyView()
+        }
     }
 
     @ViewBuilder private func reportView(_ r: ConnectionReport) -> some View {
         Label(r.message, systemImage: r.ok ? "checkmark.seal" : "xmark.octagon")
             .foregroundStyle(r.ok ? .green : .red)
             .textSelection(.enabled)
-        if let fp = r.untrustedFingerprint {
+        if let fp = r.untrustedFingerprint, proto == .webdav || proto == .ftp {
             Text(fp).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
             Button("Trust This Certificate") {
-                account.pinnedCertSHA256 = fp
+                if proto == .webdav { account.pinnedCertSHA256 = fp } else { account.ftpsTrustedFingerprint = fp }
                 report = nil
             }
         }
     }
 
-    /// 測試用密碼：有輸入就用輸入的，否則用鑰匙圈（含使用者先前在別處存的同伺服器密碼）。
-    private var effectivePassword: String {
-        password.isEmpty ? (KeychainStore.password(for: account) ?? "") : password
+    // MARK: - 動作
+
+    private var defaultKeyPath: String {
+        let ssh = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
+        return ["id_ed25519", "id_ecdsa", "id_rsa"].map { ssh.appendingPathComponent($0).path }
+            .first { FileManager.default.fileExists(atPath: $0) }.map { ($0 as NSString).abbreviatingWithTildeInPath }
+            ?? "~/.ssh/id_ed25519"
+    }
+
+    private func switchProtocol(_ p: RemoteProtocol) {
+        account.switchProtocol(to: p)
+        report = nil
+        error = nil
+    }
+
+    /// 測試用祕密：有輸入就用輸入的，否則用鑰匙圈（含使用者先前在別處存的同伺服器密碼）。
+    private var effectiveSecret: String {
+        if proto == .pcloud { return pcloudToken ?? KeychainStore.secret(for: account) ?? "" }
+        if account.usesKeyAuth { return "" }
+        return password.isEmpty ? (KeychainStore.secret(for: account) ?? "") : password
     }
 
     private func test() {
         testing = true
         report = nil
-        let (a, pw) = (account, effectivePassword)
+        let (a, secret) = (account, effectiveSecret)
         Task {
-            report = await ConnectionTester.test(a, password: pw)
+            report = await ConnectionTester.test(a, credential: secret)
             testing = false
+        }
+    }
+
+    private func chooseKey() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
+        panel.message = String(localized: "Choose the SSH private key.")
+        if panel.runModal() == .OK, let url = panel.url {
+            account.sftpKeyPath = (url.path as NSString).abbreviatingWithTildeInPath
+        }
+    }
+
+    /// pCloud OAuth：先存 app 設定，開瀏覽器登入，回來後以 token 查 email 並依回呼修正地區。
+    private func signIn() {
+        error = nil
+        do {
+            try manager.savePCloudApp(clientID: clientID, secret: clientSecret.isEmpty ? nil : clientSecret)
+        } catch let e as DAVError {
+            return error = e.message
+        } catch {
+            return self.error = error.localizedDescription
+        }
+        clientSecret = ""
+        let (id, secret, region) = (manager.pcloudClientID, KeychainStore.pcloudClientSecret ?? "", account.pcloudRegion)
+        signingIn = true
+        Task {
+            defer { signingIn = false }
+            do {
+                let result = try await PCloudOAuth.signIn(clientID: id, clientSecret: secret, preferredRegion: region) { url in
+                    Task { @MainActor in NSWorkspace.shared.open(url) }
+                }
+                pcloudToken = result.token
+                account.pcloudRegion = result.region
+                account.username = await Task.detached {
+                    try? RemoteStoreFactory.pcloudEmail(region: result.region, token: result.token)
+                }.value ?? account.username
+                report = nil
+            } catch let e as DAVError {
+                error = e.message
+            } catch is CancellationError {
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
     }
 
     private func save() {
         error = nil
         account.pinnedCertSHA256 = Account.normalizeFingerprint(account.pinnedCertSHA256)
-        if password.isEmpty, isNew, KeychainStore.password(for: account) == nil {
-            return error = String(localized: "Password is required.")
+        let secret: String?
+        switch proto {
+        case .pcloud:
+            if pcloudToken == nil, KeychainStore.secret(for: account) == nil {
+                return error = String(localized: "Sign in to pCloud first.")
+            }
+            secret = pcloudToken
+        default:
+            if password.isEmpty, isNew, !account.usesKeyAuth, KeychainStore.secret(for: account) == nil {
+                return error = String(localized: "Password is required.")
+            }
+            secret = password.isEmpty ? nil : password
         }
         do {
-            try manager.saveAccount(account, password: password.isEmpty ? nil : password)
+            try manager.saveAccount(account, secret: secret)
             onSaved(account)
             dismiss()
         } catch let e as DAVError {
