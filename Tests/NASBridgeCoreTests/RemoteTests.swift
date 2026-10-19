@@ -159,8 +159,9 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         let a = try JSONDecoder().decode(Account.self, from: Data(json.utf8))
         #expect(a.protocol == .webdav)
         #expect(a.ftpSecurity == .explicit && a.ftpMode == .passive)
-        let config = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"accounts":[],"mounts":[]}"#.utf8))
-        #expect(config.pcloudClientID == "")
+        // 上一版曾寫入 pcloudClientID（OAuth，已移除）：多出的鍵要能忽略
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"accounts":[],"mounts":[],"pcloudClientID":"x"}"#.utf8))
+        #expect(config == AppConfig())
     }
 
     @Test func validationPerProtocol() {
@@ -184,7 +185,10 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         sftp.sftpKeyPath = "/nonexistent/key"
         #expect(sftp.validationError() == "The private key file does not exist.")
 
-        #expect(Account(protocol: .pcloud).validationError() == nil)
+        var pc = Account(protocol: .pcloud)
+        #expect(pc.validationError() == "Enter the pCloud email.")
+        pc.username = "me@example.com"
+        #expect(pc.validationError() == nil)
         var dav = Account()
         dav.serverURL = "ftp://nas"
         dav.username = "u"
@@ -211,8 +215,14 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         #expect(KeychainStore.sameItem(a, b))
         b.switchProtocol(to: .sftp)
         #expect(!KeychainStore.sameItem(a, b))
-        // pCloud token 以帳號 id 為鍵：兩個 pCloud 帳號互不共用
-        #expect(!KeychainStore.sameItem(Account(protocol: .pcloud), Account(protocol: .pcloud)))
+        // pCloud token 以 email 為鍵、不含地區：改地區不必搬移，不同 email 互不共用
+        var p1 = Account(protocol: .pcloud), p2 = Account(protocol: .pcloud)
+        p1.username = "a@x.com"
+        p2.username = "a@x.com"
+        p2.pcloudRegion = .eu
+        #expect(KeychainStore.sameItem(p1, p2))
+        p2.username = "b@x.com"
+        #expect(!KeychainStore.sameItem(p1, p2))
     }
 }
 
@@ -305,9 +315,8 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         let url = store.url("stat", ["path": "/a+b c"])
         #expect(url.host() == "eapi.pcloud.com")
         #expect(url.absoluteString.contains("a%2Bb%20c"))
-        #expect(PCloudRegion(locationID: "2") == .eu)
-        #expect(PCloudRegion(apiHost: "API.pcloud.com") == .us)
-        #expect(PCloudRegion(apiHost: "evil.example.com") == nil)
+        #expect(store.request("stat", [:]).url?.query()?.contains("auth=t") == true)   // token 以 auth= 參數送出
+        #expect(PCloudRegion.us.apiHost == "api.pcloud.com")
     }
 
     @Test func errorCodesMapToErrno() {
@@ -315,6 +324,30 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         #expect(PCloudStore.error(2009, "", method: "stat").code == ENOENT)
         #expect(PCloudStore.error(2006, "", method: "deletefolder").code == ENOTEMPTY)
         #expect(PCloudStore.error(2008, "", method: "uploadfile").code == ENOSPC)
+    }
+
+    @Test func uploadResponseWithMetadataArrayDecodes() throws {
+        // 雷：uploadfile 的 metadata 是陣列（其他方法是物件），只接受物件時成功的上傳會變成錯誤
+        let upload = #"{"result":0,"metadata":[{"name":"a.bin","isfolder":false,"size":3}],"fileids":[1]}"#
+        let decoded = try JSONDecoder().decode(PCloudStore.Envelope.self, from: Data(upload.utf8))
+        #expect(decoded.result == 0 && decoded.metadata?.name == "a.bin")
+        let stat = #"{"result":0,"metadata":{"name":"b","isfolder":true,"folderid":7}}"#
+        #expect(try JSONDecoder().decode(PCloudStore.Envelope.self, from: Data(stat.utf8)).metadata?.folderid == 7)
+    }
+
+    @Test func uploadSessionResponsesDecode() throws {
+        let create = #"{"result":0,"uploadid":123456789012}"#
+        #expect(try JSONDecoder().decode(PCloudStore.Envelope.self, from: Data(create.utf8)).uploadid == 123456789012)
+        let info = #"{"result":0,"size":33554432,"md5":"x","sha1":"y"}"#
+        #expect(try JSONDecoder().decode(PCloudStore.Envelope.self, from: Data(info.utf8)).size == 33554432)
+        #expect(PCloudStore.error(2067, "", method: "upload_info").code == ENOENT)
+    }
+
+    @Test func transientErrorsAreRetried() {
+        #expect(PCloudStore.isTransient(DAVError.transport(URLError(.networkConnectionLost), "x")))
+        #expect(PCloudStore.isTransient(DAVError.transport(URLError(.timedOut), "x")))
+        #expect(!PCloudStore.isTransient(DAVError.posix(EACCES)))
+        #expect(!PCloudStore.isTransient(DAVError.posix(ENOSPC)))
     }
 
     @Test func metadataConversion() {
@@ -325,14 +358,10 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
         #expect(a.modified == Date(timeIntervalSince1970: 1_363_890_717))
     }
 
-    @Test func oauthCallbackChecksStateAndRegion() throws {
-        let cb = try PCloudOAuth.parseCallback(
-            requestLine: "GET /?code=abc&state=S&locationid=2&hostname=eapi.pcloud.com HTTP/1.1", expectedState: "S")
-        #expect(cb.code == "abc" && cb.region == .eu)
-        #expect(PCloudOAuth.tokenHost(for: cb, fallback: .us) == .eu)
-        #expect(throws: DAVError.self) {
-            try PCloudOAuth.parseCallback(requestLine: "GET /?code=abc&state=X HTTP/1.1", expectedState: "S")
-        }
+    /// 與官方公式 sha1(密碼 + sha1(小寫 email) + digest) 的獨立計算（Python hashlib）比對；含非 ASCII 密碼與大寫 email
+    @Test func passwordDigestMatchesDocumentedFormula() {
+        #expect(PCloudLogin.passwordDigest(email: "User+1@Example.com", password: "pä55", digest: "NONCE123")
+                == "6c045962382bc7efbc4fbf2b72510bedf7c0ed0f")
     }
 }
 
@@ -367,5 +396,44 @@ struct LiveLftpTests {
         print("\(spec.split(separator: "@").last ?? ""): rangeRead=\(store.supportsRangeRead) write=\(store.partialWrite)")
         let fs = RemoteFileSystem(store: store, readOnly: false)
         try FileSystemExercise.run(fs, dir: "/nasbridge-test-\(UUID().uuidString.prefix(8))")
+    }
+}
+
+/// pCloud 實機測試（預設略過）：
+///
+///   NB_LIVE_PCLOUD_NET=1 swift test --filter LivePCloud                       # 不需帳號：驗證請求格式與錯誤路徑
+///   NB_LIVE_PCLOUD="email:password" swift test --filter LivePCloud           # 實際登入並跑檔案系統情境
+///
+/// 只在帳號根目錄建立並清除一個 `nasbridge-test-<uuid>` 資料夾。開了兩步驟驗證的帳號無法自動測試。
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["NB_LIVE_PCLOUD_NET"] != nil
+                || ProcessInfo.processInfo.environment["NB_LIVE_PCLOUD"] != nil))
+struct LivePCloudTests {
+    /// 不存在的帳號：兩區都應回「登入失敗」（EACCES），而不是格式錯誤或連線錯誤
+    @Test func wrongPasswordIsAuthenticationFailure() async {
+        do {
+            _ = try await PCloudLogin.signIn(email: "nasbridge-test-\(UUID().uuidString.prefix(8))@example.invalid",
+                                             password: "wrong", preferredRegion: .us)
+            Issue.record("sign-in unexpectedly succeeded")
+        } catch let e as DAVError {
+            print("pCloud error:", e.message)
+            #expect(e.code == EACCES)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["NB_LIVE_PCLOUD"] != nil))
+    func signInAndFileSystemRoundTrip() async throws {
+        let spec = ProcessInfo.processInfo.environment["NB_LIVE_PCLOUD"]!
+        let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
+        let session = try await PCloudLogin.signIn(email: parts[0], password: parts[1], preferredRegion: .us)
+        print("pCloud region:", session.region)
+        var account = Account(protocol: .pcloud)
+        account.username = parts[0]
+        account.pcloudRegion = session.region
+        try await Task.detached {
+            let store = try RemoteStoreFactory.connect(account, remotePath: "/", credential: session.token, probeWrites: true)
+            try FileSystemExercise.run(RemoteFileSystem(store: store, readOnly: false), dir: "/nasbridge-test-\(UUID().uuidString.prefix(8))")
+        }.value
     }
 }

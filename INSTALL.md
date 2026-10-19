@@ -22,12 +22,11 @@ brew install lftp
 
 只用 WebDAV、pCloud 可不裝。app 會找 `/opt/homebrew/bin`、`/usr/local/bin` 與 PATH。
 
-## pCloud（OAuth app 註冊，一次即可）
+## pCloud
 
-1. 到 <https://docs.pcloud.com/my_apps/> 建立 app，取得 **Client ID／Client secret**。
-2. 在 app 的 Redirect URIs 加入 `http://127.0.0.1:53682/`（與 SmartphoneFileManager 相同，可共用同一個 pCloud app）。
-3. NAS Bridge：帳號 → 新增 → 協定選 pCloud → 填 Client ID／secret →「以 pCloud 登入…」，在瀏覽器同意。
-   地區（美國／歐洲）以登入回呼為準自動修正。
+不需註冊 pCloud app：帳號 → 新增 → 協定選 pCloud → 填 email、密碼 →「登入」。
+密碼只以一次性摘要送出換取登入 token，鑰匙圈只存 token；帳號開了兩步驟驗證時會再要驗證碼。
+地區（美國／歐洲）自動偵測。
 
 ## 一鍵安裝（建議）
 

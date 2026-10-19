@@ -11,8 +11,6 @@ import Observation
 public final class MountManager {
     public private(set) var accounts: [Account]
     public private(set) var mounts: [MountProfile]
-    /// pCloud OAuth app 的 client ID（secret 在鑰匙圈：`KeychainStore.pcloudClientSecret`）
-    public private(set) var pcloudClientID: String
     public private(set) var fuse: FuseLibrary.Installation?
     @ObservationIgnored private var instances: [UUID: MountInstance] = [:]
     @ObservationIgnored private let workerURL: URL
@@ -26,7 +24,6 @@ public final class MountManager {
         let config = ConfigStore.load(from: configURL)
         self.accounts = config.accounts
         self.mounts = config.mounts
-        self.pcloudClientID = config.pcloudClientID
         self.fuse = FuseLibrary.detect()
     }
 
@@ -51,13 +48,11 @@ public final class MountManager {
         return fuse != nil
     }
 
-    private func persist(accounts: [Account]? = nil, mounts: [MountProfile]? = nil, pcloudClientID: String? = nil) throws {
-        let config = AppConfig(accounts: accounts ?? self.accounts, mounts: mounts ?? self.mounts,
-                               pcloudClientID: pcloudClientID ?? self.pcloudClientID)
+    private func persist(accounts: [Account]? = nil, mounts: [MountProfile]? = nil) throws {
+        let config = AppConfig(accounts: accounts ?? self.accounts, mounts: mounts ?? self.mounts)
         try ConfigStore.save(config, to: configURL)
         self.accounts = config.accounts
         self.mounts = config.mounts
-        self.pcloudClientID = config.pcloudClientID
     }
 
     // MARK: - 帳號
@@ -80,7 +75,7 @@ public final class MountManager {
         try persist(accounts: next)
     }
 
-    /// 刪除帳號（含鑰匙圈密碼／token）。仍有掛載使用時拒絕，避免留下無帳號的掛載。
+    /// 刪除帳號（含鑰匙圈密碼）。仍有掛載使用時拒絕，避免留下無帳號的掛載。
     public func deleteAccount(_ id: UUID) throws {
         guard let account = account(id) else { return }
         let users = mounts(using: id)
@@ -89,16 +84,13 @@ public final class MountManager {
         }
         try persist(accounts: accounts.filter { $0.id != id })
         if !accounts.contains(where: { KeychainStore.sameItem($0, account) }) {
+            // pCloud：讓 token 在伺服器端失效（盡力而為，不等結果）
+            if account.protocol == .pcloud, let token = KeychainStore.secret(for: account) {
+                let region = account.pcloudRegion
+                Task.detached { await PCloudLogin.signOut(token: token, region: region) }
+            }
             KeychainStore.delete(for: account)
         }
-    }
-
-    /// pCloud OAuth app 設定（所有 pCloud 帳號共用）；secret 為 nil 表示不變更。
-    public func savePCloudApp(clientID: String, secret: String?) throws {
-        if let secret, !KeychainStore.setPCloudClientSecret(secret) {
-            throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
-        }
-        try persist(pcloudClientID: clientID.trimmingCharacters(in: .whitespaces))
     }
 
     // MARK: - 掛載設定

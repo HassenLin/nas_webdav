@@ -61,8 +61,8 @@ public enum WorkerMain {
             // VolatileXattrStore 接住（只存在記憶體）。
             "iosize=1048576",     // 與讀取區塊大小一致，減少請求數
             // 單一 FUSE 請求的時限，超過 macFUSE 會把整個掛載視為失效。慢速網路上大檔上傳（release 時）可能較久；
-            // FTP／SFTP 在伺服器不支援 REST、或改寫既有內容（handle 轉本機）時要整檔下載，給更長的時間
-            "daemon_timeout=\(account.protocol.needsLftp ? 600 : 120)",
+            // FTP／SFTP 在伺服器不支援 REST、或改寫既有內容（handle 轉本機）時要整檔下載；pCloud 大檔分段上傳含斷線重試——都給更長的時間
+            "daemon_timeout=\(account.protocol == .webdav ? 120 : 600)",
         ]
         if p.readOnly { opts.append("rdonly") }
         return opts

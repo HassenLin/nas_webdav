@@ -14,7 +14,7 @@ public enum WorkerProtocol {
 public struct WorkerConfig: Codable, Sendable {
     public var account: Account
     public var mount: MountProfile
-    /// 密碼（WebDAV／FTP／SFTP）或 access token（pCloud）
+    /// 密碼（WebDAV／FTP／SFTP）或 auth token（pCloud）
     public var credential: String
 
     public init(account: Account, mount: MountProfile, credential: String) {

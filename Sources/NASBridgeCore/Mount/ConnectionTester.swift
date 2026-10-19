@@ -11,7 +11,7 @@ public struct ConnectionReport: Sendable, Equatable {
 /// 對帳號（＋遠端路徑）做一次不掛載的連線檢查：認證、遠端路徑、配額、（選擇性）寫入方式。
 /// 與 worker 走同一條 `RemoteStoreFactory.connect`，測試通過＝掛載時的連線步驟也會通過。
 public enum ConnectionTester {
-    /// - Parameter credential: 密碼（WebDAV／FTP／SFTP）或 access token（pCloud）。
+    /// - Parameter credential: 密碼（WebDAV／FTP／SFTP）或 auth token（pCloud）。
     /// - Parameter probeWrites: 是否探測部分寫入（WebDAV 會在遠端建立並刪除一個隱藏檔）。
     public static func test(_ account: Account, remotePath: String = "/", credential: String,
                             probeWrites: Bool = false) async -> ConnectionReport {

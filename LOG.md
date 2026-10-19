@@ -1,5 +1,29 @@
 # LOG
 
+- 2026-10-19｜**pCloud 上傳／下載：套用 SmartphoneFileManager 踩到的雷**
+  - 雷 1：`uploadfile` 回應的 `metadata` 是**陣列**（其他方法是物件），只接受物件時成功的上傳被當成「unexpected response」——
+    掛載後每次存檔都會回 EIO。`Envelope` 改為兩種都接受、其他欄位寬鬆解碼；解碼失敗時附上回應開頭以利診斷。
+  - 雷 2：單一 `uploadfile` 傳大檔常逾時或中途斷線整份重來。大於 32 MiB 改用上傳工作階段
+    （`upload_create`／`upload_write`／`upload_info`／`upload_save`，官方文件未列、官方 Swift SDK 使用），每段 32 MiB；
+    斷線時等 1／3／10 秒，以 `upload_info` 查伺服器已收到的位置接著寫。工作階段在存檔前不出現在資料夾，失敗不留殘缺檔。
+    與該專案的差別：不把工作階段 ID 存檔跨重開續傳（來源是 FUSE handle 的暫存檔，關檔失敗就不存在了）。錯誤碼 2067（工作階段不存在）→ ENOENT。
+  - 雷 3：下載連結數小時後失效 → Range 讀被拒時換新連結重試一次；整檔下載改為 8 MiB 分區塊、區塊就地重試，不丟已下載的部分。
+  - pCloud 掛載的 `daemon_timeout` 由 120 改為 600 秒（大檔上傳含重試在關檔的單一 FUSE 請求內完成）。
+  - `swift build` 零警告；`swift test` 47 項通過（新增：陣列 metadata、工作階段回應、暫時性錯誤分類）。待實機驗收：pCloud 分段上傳。
+
+- 2026-10-18｜**pCloud 改為帳號密碼登入，移除 OAuth**
+  - OAuth 需要到 pCloud 註冊 app（Client ID／secret）並等待審核，不值得；改為 email＋密碼登入（`PCloudLogin`，對齊 SmartphoneFileManager）：
+    `getdigest` → `passworddigest = sha1(密碼 + sha1(小寫 email) + digest)` → `userinfo?getauth=1`（POST 本文，密碼不送出）。
+  - 兩步驟驗證：2297 時編輯器顯示驗證碼欄位 → `tfa_login`。地區自動偵測（先試設定的區，失敗再試另一區）。
+  - 套用 SmartphoneFileManager 實機踩到的雷（該專案已以歐洲帳號＋兩步驟驗證實機驗證）：
+    - 要用 `login` 方法（不是 `userinfo`）並帶 `os=6`／`device`／固定 `deviceid`（主機名稱雜湊），否則開了 2FA 的帳號不回 2297；
+      `tfa_login` 同樣帶裝置參數＋`trustdevice=1`，之後此 Mac 不必再輸入驗證碼（官方文件未記載）。
+    - 在錯的資料中心登入回 2321（This user is on another location）→ 自動改試另一區；兩區都失敗時優先回報帳密錯誤。
+    - 輸入驗證碼後按 Return 會觸發「儲存」關閉表單、驗證狀態遺失 → 輸入密碼／驗證碼時 Return 改對應「登入」／「驗證」。
+  - 鑰匙圈只存 auth token（`pcloud.com`＋email 為鍵）；請求以 `auth=` 參數送出；刪除帳號時 `logout` 讓 token 失效。
+  - 移除 `PCloudOAuth`、Client ID／secret 設定（`AppConfig.pcloudClientID`、鑰匙圈 client secret）；舊 config.json 多出的鍵會被忽略。
+  - `swift test` 44 項通過（含密碼摘要公式與 Python hashlib 比對；實機測試預設略過）；對真實 pCloud 伺服器驗證請求格式（不存在的帳號兩區皆回 2000）；實際帳號待驗證。
+
 - 2026-10-18｜**FTP／FTPS／SFTP 改用續傳機制做 offset 讀寫（FUSE driver 層）**
   - 讀：`get1 --source-region`（FTP `REST`＋`RETR`、SFTP offset），4 MiB 區塊，不再開檔整檔下載；區段跨過檔尾時接受 lftp 已寫入的部分。
   - 寫：新增寫入方式 `PartialWriteMethod.append`：`put -c` 從遠端大小接續（FTP `REST`＋`STOR`、SFTP offset），本機以稀疏檔只送新段；

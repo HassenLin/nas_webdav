@@ -16,12 +16,12 @@
 | FTPS 自簽憑證 | 只信任使用者確認過的指紋（`ssl:verify-certificate/<指紋> no`） | 比「整個關掉驗證」安全；與 WebDAV 的憑證釘選同一個 UI 流程（測試連線 →「信任此憑證」） |
 | SFTP 主機金鑰 | 首次連線記住（`StrictHostKeyChecking=accept-new`），存在 app 自己的 `known_hosts` | TOFU；不動使用者的 `~/.ssh/known_hosts` |
 | 純 FTP | 允許，清單與編輯器顯示「未加密」警告 | 許多舊 NAS 只有純 FTP；WebDAV 維持只允許 HTTPS（Basic 認證明文外洩風險且 NAS 都支援 HTTPS） |
-| pCloud | HTTP JSON API（同步、路徑定址）、`getfilelink`＋Range 讀（連結快取 10 分鐘）、`uploadfile` 整檔上傳；OAuth2 loopback（`127.0.0.1:53682`），token 存鑰匙圈 | 不需第三方 SDK；美國／歐洲 API host 不同，換 token 以回呼帶回的 hostname 為準（只接受兩個官方 host）；redirect URI 與 SmartphoneFileManager 相同，可共用同一個 pCloud app |
+| pCloud | HTTP JSON API（同步、路徑定址）、`getfilelink`＋Range 讀（連結快取 10 分鐘，被拒時換新連結重試）、≤32 MiB `uploadfile` 整檔上傳、更大的走上傳工作階段（`upload_create`／`write`／`info`／`save`，每段 32 MiB、斷線從伺服器已收到處接著寫；`uploadfile` 回應的 metadata 是陣列要特別解碼）；**帳號密碼登入**（`getdigest`＋`passworddigest`，POST 本文），支援兩步驟驗證（`login`＋`os`／`deviceid` → 2297 → `tfa_login`＋`trustdevice`；官方文件未記載，依 SmartphoneFileManager 實機驗證的做法）、錯區 2321 自動換區；只存 auth token、刪帳號時 `logout` | 不需第三方 SDK。不用 OAuth：OAuth 要使用者到 pCloud 註冊 app 並等待審核，自用工具不值得（做法對齊 SmartphoneFileManager 的 `PCloudLogin`）。存 token 不存密碼：開了兩步驟驗證的帳號若存密碼、每次掛載都要驗證碼。美國／歐洲帳號互不相通且錯區與帳密錯回同一錯誤碼 → 先試設定的區、失敗再試另一區 |
 | rename 覆蓋 | `renameReplacesTarget == false` 的協定（SFTP、pCloud、FTP）先刪目的檔再改名 | Finder／編輯器「安全存檔」依賴 POSIX rename 覆蓋；非原子，中間失敗會留下「目的檔已刪」 |
 | 簽章 | 優先用鑰匙圈裡有效的 Apple Development 憑證，找不到才 ad-hoc；不加 Hardened Runtime | 鑰匙圈存取權限綁在簽章上：ad-hoc 每次 build cdhash 不同、每次都要重新「允許」；固定憑證則同意一次永久有效。Hardened Runtime 的 library validation 會拒絕 dlopen 他人簽章的 libfuse |
 | 多實例 | 每個掛載一個 worker 子行程（同一執行檔 `--fuse-worker`） | `fuse_main` 處理訊號、全域狀態，一行程一掛載最單純；一個掛載卡住或崩潰不影響其他掛載與 UI |
 | 帳號與掛載分離 | `Account`（伺服器＋帳號＋鑰匙圈密碼）與 `MountProfile`（帳號＋遠端路徑→掛載點） | 同一台 NAS 常掛多個共用資料夾，帳密只需維護一份；被使用中的帳號不可刪，避免懸空參照 |
-| 鑰匙圈項目 | 網際網路密碼（伺服器＋埠＋協定（HTTPS／FTP／FTPS／SSH）＋帳號為鍵）；pCloud token 為一般密碼（帳號 id 為鍵） | 「鑰匙圈存取」以伺服器顯示、可沿用 Finder 已存的密碼；改網址或帳號時自動搬移 |
+| 鑰匙圈項目 | 網際網路密碼（伺服器＋埠＋協定（HTTPS／FTP／FTPS／SSH）＋帳號為鍵）；pCloud token 以 `pcloud.com`＋email 為鍵 | 「鑰匙圈存取」以伺服器顯示、可沿用 Finder 已存的密碼；改網址或帳號時自動搬移 |
 | macFUSE 安裝 | app 內下載官方 dmg → `.sha256` 比對 → `pkgutil --check-signature` 限定作者 Team ID `3T5GSNBU6W` → 交給「安裝程式」 | 一鍵完成又不需要 app 取得 root；校驗碼防傳輸損毀，Team ID 防 release 被換成他人簽章的套件 |
 | Homebrew 途徑 | 產生 `.command` 用「終端機」開啟 | 不需「自動化」權限；brew 自己會要求管理者密碼 |
 | 密碼傳遞 | 主 app 讀鑰匙圈 → stdin JSON 給 worker（密碼或 pCloud token；lftp 再經環境變數 `LFTP_PASSWORD`） | 參數／環境變數會被 `ps` 看到；worker 不碰鑰匙圈也就不會跳第二次授權 |

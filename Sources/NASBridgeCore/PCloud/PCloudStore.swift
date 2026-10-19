@@ -3,11 +3,16 @@ import Foundation
 /// `RemoteStore` 的 pCloud 實作（HTTP JSON API，https://docs.pcloud.com；移植自 SmartphoneFileManager 並改為同步）。
 ///
 /// - **地區**：美國帳號只能打 `api.pcloud.com`、歐洲帳號只能打 `eapi.pcloud.com`（`PCloudRegion`）。
-/// - 認證：OAuth2 access token，以 `Authorization: Bearer` 送出（不放 URL，避免出現在 log／proxy）。
+/// - 認證：帳號密碼登入（`PCloudLogin`，在帳號編輯器做一次）取得的 auth token，每個請求帶 `auth=` 參數。
+///   鑰匙圈只存 token、不存密碼。
 /// - 回應一律 HTTP 200，成敗看 JSON 的 `result`（0＝成功），錯誤碼對應見 `error(_:_:method:)`。
 /// - 所有操作以**路徑**指定（`path=`／`topath=`），與 FUSE 的路徑模型一致，不需維護 id 對照。
 /// - 讀取：`getfilelink` 取得 CDN 連結後 Range GET；連結有效數小時，每個路徑快取 10 分鐘，寫入／改名／刪除即失效。
-/// - 寫入：`uploadfile` 只能整檔上傳 → 部分寫入不支援（RemoteFileSystem 改走暫存檔）。
+///   連結被拒（非 206/200/416）時換新連結重試一次。整檔下載（`download`）也以 Range 分區塊進行，
+///   斷線時區塊就地重試，不丟已下載的部分。
+/// - 寫入：不支援部分寫入（RemoteFileSystem 改走暫存檔，關檔時整檔上傳）。不超過一段（`uploadChunk`）用 `uploadfile`
+///   一次送完；較大的走上傳工作階段（`upload_create`／`upload_write`／`upload_save`），斷線時以 `upload_info`
+///   查伺服器已收到的位置接著寫——單一 `uploadfile` 傳大檔常逾時或斷線整份重來（SmartphoneFileManager 實測）。
 ///
 /// 為什麼是同步 API：呼叫者是 FUSE 的工作執行緒（同 `WebDAVClient`），**不可在 main thread 呼叫**。
 public final class PCloudStore: RemoteStore, @unchecked Sendable {
@@ -18,7 +23,7 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
 
     let region: PCloudRegion
     private let root: RemoteRoot
-    private let token: String
+    private let auth: String
     private let session: URLSession
     private let lock = NSLock()
     private var links: [String: (url: URL, expiry: Date)] = [:]
@@ -26,7 +31,7 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
     init(region: PCloudRegion, remotePath: String, token: String, timeout: TimeInterval) {
         self.region = region
         self.root = RemoteRoot(remotePath)
-        self.token = token
+        self.auth = token
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.httpMaximumConnectionsPerHost = 8
@@ -43,6 +48,8 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
     struct Metadata: Decodable, Sendable {
         let name: String
         let isfolder: Bool
+        /// 資料夾 id（`upload_save` 只接受 folderid）
+        var folderid: UInt64? = nil
         let size: Int64?
         let modified: String?
         let created: String?
@@ -58,6 +65,32 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
         let email: String?
         let quota: Int64?
         let usedquota: Int64?
+        /// `upload_create` 的工作階段 ID
+        let uploadid: UInt64?
+        /// `upload_info`：工作階段已寫入的位元組數
+        let size: Int64?
+
+        private enum CodingKeys: String, CodingKey {
+            case result, error, metadata, hosts, path, email, quota, usedquota, uploadid, size
+        }
+
+        /// 雷：`metadata` 多數方法是單一物件，但 `uploadfile` 回傳**陣列**（每個上傳檔一筆）——
+        /// 只接受物件時，成功的上傳會被當成「unexpected response」。兩種都接受（取第一筆），
+        /// 其他欄位也寬鬆解碼：只有 `result` 必要，多一個意料外的型別不該讓成功的操作變成失敗。
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            result = try c.decode(Int.self, forKey: .result)
+            error = try? c.decodeIfPresent(String.self, forKey: .error)
+            metadata = (try? c.decodeIfPresent(Metadata.self, forKey: .metadata))
+                ?? (try? c.decodeIfPresent([Metadata].self, forKey: .metadata))?.first
+            hosts = try? c.decodeIfPresent([String].self, forKey: .hosts)
+            path = try? c.decodeIfPresent(String.self, forKey: .path)
+            email = try? c.decodeIfPresent(String.self, forKey: .email)
+            quota = try? c.decodeIfPresent(Int64.self, forKey: .quota)
+            usedquota = try? c.decodeIfPresent(Int64.self, forKey: .usedquota)
+            uploadid = try? c.decodeIfPresent(UInt64.self, forKey: .uploadid)
+            size = try? c.decodeIfPresent(Int64.self, forKey: .size)
+        }
     }
 
     // MARK: - 請求
@@ -73,10 +106,13 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
         return comps.url!
     }
 
-    private func request(_ method: String, _ parameters: [String: String], httpMethod: String = "GET") -> URLRequest {
-        var req = URLRequest(url: url(method, parameters))
+    /// 每個請求都帶 `auth=`（官方的 token 傳遞方式；HTTPS 下 URL 也是加密的）。
+    /// 不用 POST 本文：`uploadfile` 的本文是檔案內容，token 只能放查詢參數，全部一致較單純。
+    func request(_ method: String, _ parameters: [String: String], httpMethod: String = "GET") -> URLRequest {
+        var params = parameters
+        params["auth"] = auth
+        var req = URLRequest(url: url(method, params))
         req.httpMethod = httpMethod
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return req
     }
 
@@ -105,7 +141,9 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
     private func decode(_ reply: Reply, method: String) throws -> Envelope {
         if let error = reply.2 { throw DAVError.transport(error, "pCloud \(method)") }
         guard let data = reply.0, let env = try? JSONDecoder().decode(Envelope.self, from: data) else {
-            throw DAVError.posix(EIO, "pCloud \(method): unexpected response")
+            // 附上回應開頭以利診斷（回應本文不含 token）
+            let head = String(decoding: (reply.0 ?? Data()).prefix(200), as: UTF8.self)
+            throw DAVError.posix(EIO, "pCloud \(method): unexpected response: \(head)")
         }
         guard env.result == 0 else { throw Self.error(env.result, env.error ?? "", method: method) }
         return env
@@ -115,8 +153,8 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
     static func error(_ code: Int, _ message: String, method: String) -> DAVError {
         let detail = message.isEmpty ? "pCloud \(method): error \(code)" : "\(message) (\(code))"
         let errno: Int32 = switch code {
-        case 1000, 2000, 2094, 2095, 4000: EACCES       // 未登入、token 失效、登入失敗
-        case 2002, 2005, 2009, 2055: ENOENT             // 路徑中的資料夾／檔案不存在
+        case 1000, 2000, 2094, 2095, 4000: EACCES       // 未登入、token 失效、登入失敗、登入嘗試過多
+        case 2002, 2005, 2009, 2055, 2067: ENOENT       // 路徑中的資料夾／檔案不存在；2067＝上傳工作階段不存在／過期
         case 2004: EEXIST                               // 資料夾已存在
         case 2006: ENOTEMPTY                            // 資料夾非空
         case 2003: EACCES                               // 無權限
@@ -175,8 +213,17 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
         return url
     }
 
+    /// 連結數小時後失效，大檔可能讀不完：區塊請求被拒時換一個新連結重試該區塊一次
     public func read(_ path: String, offset: Int64, length: Int) throws -> Data {
         guard length > 0 else { return Data() }
+        do {
+            return try readRange(path, offset: offset, length: length)
+        } catch let e as DAVError where e.message.contains("HTTP") {
+            return try readRange(path, offset: offset, length: length)   // readRange 已讓舊連結失效
+        }
+    }
+
+    private func readRange(_ path: String, offset: Int64, length: Int) throws -> Data {
         var req = URLRequest(url: try fileLink(path))
         req.setValue("bytes=\(offset)-\(offset + Int64(length) - 1)", forHTTPHeaderField: "Range")
         let reply = wait { done in session.dataTask(with: req) { done(($0, $1, $2)) } }
@@ -195,27 +242,23 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
         }
     }
 
+    /// 整檔下載＝逐塊 Range 讀取並寫入本機檔：斷線時只重試那一塊（`retrying`），不丟已下載的部分
     public func download(_ path: String, to local: URL) throws {
-        let req = URLRequest(url: try fileLink(path))
-        let reply = wait { done in
-            session.downloadTask(with: req) { tmp, resp, err in
-                // 暫存檔在 handler 返回後即被刪除，必須在這裡搬走
-                var moveError: Error?
-                if let tmp {
-                    do {
-                        try? FileManager.default.removeItem(at: local)
-                        try FileManager.default.moveItem(at: tmp, to: local)
-                    } catch { moveError = error }
-                }
-                done((nil, resp, err ?? moveError))
+        FileManager.default.createFile(atPath: local.path, contents: nil)
+        let out = try FileHandle(forWritingTo: local)
+        defer { try? out.close() }
+        var offset: Int64 = 0
+        while true {
+            let block = try retrying("download \(path)") {
+                try read(path, offset: offset, length: Self.downloadBlock)
             }
-        }
-        if let error = reply.2 { throw DAVError.transport(error, "pCloud download \(path)") }
-        guard let http = reply.1 as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            invalidateLink(path)
-            throw DAVError.http((reply.1 as? HTTPURLResponse)?.statusCode ?? 0, "pCloud download \(path)")
+            try out.write(contentsOf: block)
+            offset += Int64(block.count)
+            if block.count < Self.downloadBlock { return }   // 短讀＝到檔尾
         }
     }
+
+    // MARK: - 上傳
 
     /// `uploadfile` 以 PUT＋`filename` 參數時，請求本文即檔案內容（不需 multipart）；同名檔案直接覆寫。
     /// `nopartial=1`：中斷時伺服器不留下殘缺檔。
@@ -234,9 +277,55 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
 
     public func upload(_ path: String, file local: URL) throws {
         invalidateLink(path)
-        let req = uploadRequest(path)
-        let reply = wait { done in session.uploadTask(with: req, fromFile: local) { done(($0, $1, $2)) } }
-        try decode(reply, method: "uploadfile")
+        let size = (try FileManager.default.attributesOfItem(atPath: local.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > Int64(Self.uploadChunk) else {
+            let req = uploadRequest(path)
+            let reply = wait { done in session.uploadTask(with: req, fromFile: local) { done(($0, $1, $2)) } }
+            try decode(reply, method: "uploadfile")
+            return
+        }
+        try uploadSession(path, file: local, size: size)
+    }
+
+    /// 上傳工作階段（官方文件未列出、官方 Swift SDK 使用；SmartphoneFileManager 實作）：
+    /// `upload_create` 建立 → `upload_write` 依位移寫入多段 → `upload_save` 存成檔案。
+    /// 工作階段在 `upload_save` 前不會出現在資料夾裡，所以中途失敗不會留下殘缺檔。
+    ///
+    /// 與 SmartphoneFileManager 的差別：那邊把工作階段 ID 存檔、重開 app 後還能接著傳；
+    /// 這裡的來源是 FUSE handle 的暫存檔，關檔失敗後就不存在了，只在這次呼叫內續傳（`retrying` 後以 `upload_info` 對位）。
+    private func uploadSession(_ path: String, file local: URL, size: Int64) throws {
+        guard let id = try call("upload_create", [:]).uploadid else {
+            throw DAVError.posix(EIO, "pCloud upload_create: no upload id")
+        }
+        let reader = try FileHandle(forReadingFrom: local)
+        defer { try? reader.close() }
+        var offset: Int64 = 0
+        while offset < size {
+            let start = offset
+            offset = try retrying("upload \(path)", resync: {
+                // 斷線時那一段可能寫了一半：以伺服器實際收到的大小為準
+                try self.call("upload_info", ["uploadid": String(id)]).size ?? start
+            }) { from in
+                try reader.seek(toOffset: UInt64(from))
+                guard let chunk = try reader.read(upToCount: Self.uploadChunk), !chunk.isEmpty else {
+                    throw DAVError.posix(EIO, "pCloud upload: local file became shorter while uploading")
+                }
+                var req = request("upload_write", ["uploadid": String(id), "uploadoffset": String(from)], httpMethod: "POST")
+                req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+                let reply = wait { done in session.uploadTask(with: req, from: chunk) { done(($0, $1, $2)) } }
+                try decode(reply, method: "upload_write")
+                return from + Int64(chunk.count)
+            } start: { start }
+        }
+        let parent = p(path).parentPath
+        guard let folderID = try call("listfolder", ["path": parent, "nofiles": "1", "noshares": "1"]).metadata?.folderid else {
+            throw DAVError.posix(ENOENT, "pCloud: \(parent)")
+        }
+        // 同名檔直接覆寫（與 uploadfile 相同）
+        _ = try retrying("upload_save \(path)") {
+            try call("upload_save", ["uploadid": String(id), "folderid": String(folderID),
+                                     "name": (p(path) as NSString).lastPathComponent])
+        }
     }
 
     public func write(_ path: String, offset: Int64, data: Data) throws {
@@ -256,6 +345,41 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
         invalidateLink(to)
         let isFolder = try stat(from).isDirectory
         try call(isFolder ? "renamefolder" : "renamefile", ["path": p(from), "topath": p(to)])
+    }
+
+    // MARK: - 暫時性錯誤重試
+
+    /// 上傳每段大小：夠大才不會被請求往返拖慢，夠小才讓一次斷線只損失一段（同 SmartphoneFileManager）
+    static let uploadChunk = 32 << 20
+    /// 整檔下載每塊大小
+    static let downloadBlock = 8 << 20
+    /// 重試前的等待（秒）。總和不可太長：呼叫者是一個 FUSE 請求，受 `daemon_timeout` 限制
+    static let retryDelays: [UInt32] = [1, 3, 10]
+
+    /// 斷線、逾時、5xx 等「等一下可能就好」的錯誤；帳密錯誤、不存在、空間不足不會因等待而好轉
+    static func isTransient(_ error: Error) -> Bool {
+        guard let e = error as? DAVError else { return false }
+        return [ETIMEDOUT, EHOSTUNREACH, EIO].contains(e.code)
+    }
+
+    private func retrying<T>(_ what: String, _ body: () throws -> T) throws -> T {
+        try retrying(what, resync: { 0 }, { _ in try body() }, start: { 0 })
+    }
+
+    /// 執行 `body(位置)`；暫時性錯誤時等一下，以 `resync()` 重新取得起點後再試，次數用完才拋出
+    private func retrying<T>(_ what: String, resync: () throws -> Int64, _ body: (Int64) throws -> T,
+                             start: () -> Int64) throws -> T {
+        var from = start()
+        for delay in Self.retryDelays {
+            do {
+                return try body(from)
+            } catch where Self.isTransient(error) {
+                NSLog("pCloud %@: %@ — retry in %us", what, "\(error)", delay)
+                sleep(delay)
+                if let resumed = try? resync() { from = resumed }
+            }
+        }
+        return try body(from)
     }
 
     // MARK: - 轉換

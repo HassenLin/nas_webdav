@@ -62,23 +62,9 @@ public enum PCloudRegion: String, Codable, CaseIterable, Identifiable, Sendable 
 
     public var apiHost: String { self == .us ? "api.pcloud.com" : "eapi.pcloud.com" }
 
-    /// OAuth 回呼的 `locationid` → 地區
-    public init?(locationID: String) {
-        switch locationID {
-        case "1": self = .us
-        case "2": self = .eu
-        default: return nil
-        }
-    }
-
-    /// OAuth 回呼的 `hostname`（只接受兩個官方 API host）→ 地區
-    public init?(apiHost: String) {
-        guard let r = Self.allCases.first(where: { $0.apiHost == apiHost.lowercased() }) else { return nil }
-        self = r
-    }
 }
 
-/// 一個遠端帳號：協定＋伺服器＋使用者名稱（＋密碼或 token，存鑰匙圈，見 `KeychainStore`）。
+/// 一個遠端帳號：協定＋伺服器＋使用者名稱（＋密碼，存鑰匙圈，見 `KeychainStore`）。
 /// 多個掛載（`MountProfile`）可共用同一帳號，例如同一台 NAS 的 `/home` 與 `/photo`。
 ///
 /// 位址一律存在 `serverURL`（WebDAV `https://nas:5006/dav`、FTP `ftp://nas:21`、SFTP `sftp://nas`），
@@ -90,7 +76,7 @@ public struct Account: Codable, Identifiable, Hashable, Sendable {
     public var `protocol`: RemoteProtocol = .webdav
     /// 例如 `https://nas.local:5006`（Synology WebDAV HTTPS 預設埠 5006）；pCloud 不使用。
     public var serverURL = "https://"
-    /// pCloud 為登入後的 email（只供顯示）
+    /// pCloud 為登入用的 email
     public var username = ""
     /// WebDAV：釘選的伺服器憑證 SHA-256（hex，小寫無冒號）。設定後只接受此憑證；空字串＝走系統信任鏈。
     public var pinnedCertSHA256 = ""
@@ -103,6 +89,7 @@ public struct Account: Codable, Identifiable, Hashable, Sendable {
     public var ftpsTrustedFingerprint = ""
     /// SFTP：私鑰檔路徑；空字串＝密碼登入。有密語的金鑰請先加入 ssh-agent。
     public var sftpKeyPath = ""
+    /// pCloud：帳號所在資料中心（登入時先試這區，失敗再試另一區，以成功的那區覆寫）
     public var pcloudRegion: PCloudRegion = .us
 
     public init(protocol: RemoteProtocol = .webdav) {
@@ -180,7 +167,7 @@ public struct Account: Codable, Identifiable, Hashable, Sendable {
     /// WebDAV 只允許 HTTPS：帳密以 Basic/Digest 傳送，明文 HTTP 會外洩。
     /// FTP 允許明文（協定本身如此，許多舊 NAS 只有純 FTP），由 UI 顯示警告。
     public func validationError() -> String? {
-        if self.protocol == .pcloud { return nil }
+        if self.protocol == .pcloud { return username.contains("@") ? nil : "Enter the pCloud email." }
         guard let url else { return "Server URL is invalid." }
         if url.scheme?.lowercased() != self.protocol.scheme {
             return self.protocol == .webdav ? "Only https:// is allowed." : "Server URL is invalid."

@@ -78,7 +78,7 @@ public enum RemoteStoreFactory {
     /// 建立並驗證：連線、認證、遠端路徑存在且為資料夾。
     /// - Parameter probeWrites: 是否實測部分寫入（WebDAV、FTP／SFTP 會在遠端建立並刪除一個隱藏檔）；
     ///   唯讀掛載不探測（不能寫探測檔）：WebDAV 視為不支援、FTP／SFTP 假設 REST 讀可用（RFC 3659，幾乎都支援）。
-    /// - Parameter credential: 密碼（WebDAV／FTP／SFTP）或 access token（pCloud）。
+    /// - Parameter credential: 密碼（WebDAV／FTP／SFTP）或 auth token（pCloud，`PCloudLogin` 取得）。
     public static func connect(_ account: Account, remotePath: String, credential: String,
                                probeWrites: Bool, timeout: TimeInterval = 30) throws -> any RemoteStore {
         if let msg = account.validationError() { throw DAVError.posix(EINVAL, msg) }
@@ -98,11 +98,6 @@ public enum RemoteStoreFactory {
             guard try store.stat("/").isDirectory else { throw notFolder }
             return store
         }
-    }
-
-    /// pCloud 登入後查帳號 email（顯示用；只在主 app 的背景執行緒呼叫）
-    public static func pcloudEmail(region: PCloudRegion, token: String) throws -> String? {
-        try PCloudStore(region: region, remotePath: "/", token: token, timeout: 15).userEmail()
     }
 }
 

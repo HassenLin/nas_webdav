@@ -8,7 +8,7 @@ import SwiftUI
 ///   - WebDAV：伺服器網址（可含路徑前綴）、憑證釘選（SHA-256）
 ///   - FTP：加密（FTPS explicit／implicit／無）、資料通道（被動／主動）、FTPS 自簽憑證指紋
 ///   - SFTP：密碼或私鑰登入
-///   - pCloud：地區、OAuth 登入（app 的 client ID／secret 所有 pCloud 帳號共用）
+///   - pCloud：地區、email＋密碼登入（兩步驟驗證時再輸入驗證碼）；鑰匙圈只存登入 token，不存密碼
 struct AccountEditor: View {
     let manager: MountManager
     let isNew: Bool
@@ -16,13 +16,13 @@ struct AccountEditor: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var account: Account
-    /// 空字串＝沿用鑰匙圈中的密碼
+    /// 空字串＝沿用鑰匙圈中的密碼（pCloud：只用來登入，不儲存）
     @State private var password = ""
     /// pCloud：這次登入取得、尚未存入鑰匙圈的 token
     @State private var pcloudToken: String?
-    @State private var clientID: String
-    /// 空字串＝沿用鑰匙圈中的 client secret
-    @State private var clientSecret = ""
+    /// pCloud：等待輸入兩步驟驗證碼
+    @State private var pendingTwoFactor: PCloudLogin.TwoFactorRequired?
+    @State private var verificationCode = ""
     @State private var signingIn = false
     @State private var testing = false
     @State private var report: ConnectionReport?
@@ -33,10 +33,13 @@ struct AccountEditor: View {
         self.isNew = isNew
         self.onSaved = onSaved
         _account = State(initialValue: initial)
-        _clientID = State(initialValue: manager.pcloudClientID)
     }
 
     private var proto: RemoteProtocol { account.protocol }
+
+    /// pCloud 登入進行中（正在輸入密碼或驗證碼）：Return 要觸發「登入」／「驗證」而不是「儲存」——
+    /// 儲存會關閉表單，進行到一半的兩步驟驗證狀態就會遺失、回到輸入密碼（SmartphoneFileManager 實機踩到）
+    private var pcloudSigningIn: Bool { proto == .pcloud && (pendingTwoFactor != nil || !password.isEmpty) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,7 +72,9 @@ struct AccountEditor: View {
                 if testing { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save", action: save).keyboardShortcut(.defaultAction).disabled(signingIn)
+                Button("Save", action: save)
+                    .keyboardShortcut(pcloudSigningIn ? nil : .defaultAction)
+                    .disabled(signingIn)
             }
             .padding()
         }
@@ -103,7 +108,9 @@ struct AccountEditor: View {
             }
             .pickerStyle(.segmented)
         }
-        if proto != .pcloud {
+        if proto == .pcloud {
+            TextField("Email", text: $account.username)
+        } else {
             TextField("Username", text: $account.username)
         }
         if proto == .sftp {
@@ -120,44 +127,42 @@ struct AccountEditor: View {
                 }
             }
         }
-        if proto != .pcloud, !account.usesKeyAuth {
+        if proto == .pcloud {
+            SecureField("Password", text: $password, prompt: Text("Used only to sign in — not stored"))
+        } else if !account.usesKeyAuth {
             SecureField("Password", text: $password,
                         prompt: Text(isNew ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
         }
     }
 
     @ViewBuilder private var pcloudSections: some View {
-        Section("pCloud Sign-in") {
+        Section {
             LabeledContent("Status") {
                 if pcloudToken != nil || (!isNew && KeychainStore.secret(for: account) != nil) {
-                    Text(account.username.isEmpty ? String(localized: "Signed in") : account.username)
+                    Text("Signed in")
                 } else {
                     Text("Not signed in").foregroundStyle(.orange)
                 }
             }
-            HStack {
-                Button("Sign in with pCloud…", action: signIn).disabled(signingIn)
-                if signingIn {
-                    ProgressView().controlSize(.small)
-                    Text("Finish signing in in your browser.").font(.caption).foregroundStyle(.secondary)
+            if pendingTwoFactor != nil {
+                HStack {
+                    TextField("Verification code", text: $verificationCode, prompt: Text(verbatim: "123456"))
+                    Button("Verify", action: verify)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(signingIn || verificationCode.filter(\.isNumber).isEmpty)
+                    Button("Cancel") { pendingTwoFactor = nil; verificationCode = "" }
                 }
+            } else {
+                Button("Sign In", action: signIn)
+                    .keyboardShortcut(pcloudSigningIn ? .defaultAction : nil)
+                    .disabled(signingIn || password.isEmpty || !account.username.contains("@"))
             }
-        }
-        Section {
-            TextField("Client ID", text: $clientID)
-            SecureField("Client secret", text: $clientSecret,
-                        prompt: Text(KeychainStore.pcloudClientSecret == nil ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
-            LabeledContent("Redirect URI") {
-                Text(verbatim: PCloudOAuth.redirectURI).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-            }
+            if signingIn { ProgressView().controlSize(.small) }
         } header: {
-            Text("pCloud App")
+            Text("pCloud Sign-in")
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Register an app at pCloud and add the redirect URI above. All pCloud accounts share this app.")
-                Link("Open pCloud My Apps", destination: PCloudOAuth.appsPage)
-            }
-            .font(.caption).foregroundStyle(.secondary)
+            Text("The password is sent only as a one-time digest to get a sign-in token; only the token is stored in the keychain. The region is detected automatically.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -262,34 +267,35 @@ struct AccountEditor: View {
         }
     }
 
-    /// pCloud OAuth：先存 app 設定，開瀏覽器登入，回來後以 token 查 email 並依回呼修正地區。
+    /// pCloud 帳號密碼登入：成功拿 token；帳號開了兩步驟驗證則先顯示驗證碼欄位（`verify`）。
     private func signIn() {
+        let (email, pw, region) = (account.username, password, account.pcloudRegion)
+        runSignIn { try await PCloudLogin.signIn(email: email, password: pw, preferredRegion: region) }
+    }
+
+    private func verify() {
+        guard let pending = pendingTwoFactor else { return }
+        let code = verificationCode
+        runSignIn { try await PCloudLogin.verify(pending, code: code) }
+    }
+
+    private func runSignIn(_ attempt: @escaping @Sendable () async throws -> PCloudLogin.Session) {
         error = nil
-        do {
-            try manager.savePCloudApp(clientID: clientID, secret: clientSecret.isEmpty ? nil : clientSecret)
-        } catch let e as DAVError {
-            return error = e.message
-        } catch {
-            return self.error = error.localizedDescription
-        }
-        clientSecret = ""
-        let (id, secret, region) = (manager.pcloudClientID, KeychainStore.pcloudClientSecret ?? "", account.pcloudRegion)
+        report = nil
         signingIn = true
         Task {
             defer { signingIn = false }
             do {
-                let result = try await PCloudOAuth.signIn(clientID: id, clientSecret: secret, preferredRegion: region) { url in
-                    Task { @MainActor in NSWorkspace.shared.open(url) }
-                }
-                pcloudToken = result.token
-                account.pcloudRegion = result.region
-                account.username = await Task.detached {
-                    try? RemoteStoreFactory.pcloudEmail(region: result.region, token: result.token)
-                }.value ?? account.username
-                report = nil
+                let session = try await attempt()
+                pcloudToken = session.token
+                account.pcloudRegion = session.region   // 以實際登入成功的地區為準
+                password = ""
+                pendingTwoFactor = nil
+                verificationCode = ""
+            } catch let tfa as PCloudLogin.TwoFactorRequired {
+                pendingTwoFactor = tfa
             } catch let e as DAVError {
                 error = e.message
-            } catch is CancellationError {
             } catch {
                 self.error = error.localizedDescription
             }

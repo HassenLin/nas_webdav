@@ -14,8 +14,6 @@
 "Choose an empty folder to use as the mount point." = "选择一个空文件夹作为挂载点。";
 "Choose the SSH private key." = "选择 SSH 私钥。";
 "Choose…" = "选择…";
-"Client ID" = "Client ID";
-"Client secret" = "Client secret";
 "Connection Test" = "连接测试";
 "Data connection" = "资料连接";
 "Delete" = "删除";
@@ -28,6 +26,7 @@
 "Download the official installer from GitHub; its checksum and signature are verified before the macOS Installer opens. You will be asked for an administrator password." = "从 GitHub 下载官方安装程序，验证校验码与签章后开启 macOS“安装程序”。过程中会要求输入管理者密码。";
 "Downloading %@…" = "正在下载 %@…";
 "Edit…" = "编辑…";
+"Email" = "Email";
 "Empty — use system trust" = "留空＝使用系统信任";
 "Encryption" = "加密";
 "Error: %@" = "错误：%@";
@@ -36,7 +35,6 @@
 "FTPS — explicit TLS" = "FTPS — 明确式 TLS（explicit）";
 "FTPS — implicit TLS" = "FTPS — 隐含式 TLS（implicit）";
 "Filled in by “Trust This Certificate” when the server uses a self-signed certificate." = "服务器使用自签证书时，由“信任此证书”自动填入。";
-"Finish signing in in your browser." = "请在浏览器中完成登录。";
 "Finish the installation in the Installer or Terminal window. This dialog updates automatically." = "请在“安装程序”或“终端”窗口完成安装，此对话框会自动更新。";
 "Force Unmount" = "强制卸载";
 "HTTPS only. Pin the certificate fingerprint when the NAS uses a self-signed certificate." = "仅支持 HTTPS。NAS 使用自签证书时，请固定证书指纹。";
@@ -76,7 +74,6 @@
 "Open Privacy & Security" = "打开“隐私与安全性”";
 "Open System Settings → Privacy & Security and allow the system software from “Benjamin Fleischer”, then restart." = "打开“系统设置 → 隐私与安全性”，允许“Benjamin Fleischer”的系统软体，然后重启。";
 "Open in Finder" = "在 Finder 中打开";
-"Open pCloud My Apps" = "开启 pCloud My Apps";
 "Opening Installer…" = "正在开启安装程序…";
 "Passive" = "被动";
 "Password" = "密码";
@@ -86,9 +83,7 @@
 "Protocol" = "协定";
 "Quit NAS Bridge" = "结束 NAS Bridge";
 "Read only" = "只读";
-"Redirect URI" = "Redirect URI";
 "Region" = "地区";
-"Register an app at pCloud and add the redirect URI above. All pCloud accounts share this app." = "请在 pCloud 注册一个 app，并加入上方的 redirect URI。所有 pCloud 帐号共用这个 app。";
 "Remembered on first connection" = "首次连接时记住";
 "Remote Path" = "远端路径";
 "Save" = "保存";
@@ -99,9 +94,9 @@
 "Server" = "服务器";
 "Server URL" = "服务器网址";
 "Show Password" = "显示密码";
+"Sign In" = "登录";
 "Sign in to pCloud first." = "请先登录 pCloud。";
 "Sign in with" = "登录方式";
-"Sign in with pCloud…" = "以 pCloud 登录…";
 "Signed by %@" = "签署者：%@";
 "Signed in" = "已登录";
 "Source" = "来源";
@@ -110,6 +105,7 @@
 "Stored in the keychain" = "存于钥匙串";
 "Test Connection" = "测试连接";
 "The password is also removed from the keychain." = "密码也会从钥匙串移除。";
+"The password is sent only as a one-time digest to get a sign-in token; only the token is stored in the keychain. The region is detected automatically." = "密码只以一次性摘要送出、换取登录 token；钥匙串只存 token，不存密码。地区会自动检测。";
 "The volume is unmounted. Files on the server are not affected." = "会先卸载磁盘，服务器上的文件不受影响。";
 "Trust This Certificate" = "信任此证书";
 "Trust the certificate in the account settings." = "请在帐号设置中信任此证书。";
@@ -120,10 +116,12 @@
 "Unmount" = "卸载";
 "Unmount All" = "全部卸载";
 "Unmounting…" = "卸载中…";
+"Used only to sign in — not stored" = "只用于登录，不会保存";
 "Username" = "用户名称";
+"Verification code" = "验证码";
+"Verify" = "验证";
 "Verifying checksum and signature…" = "正在验证校验码与签章…";
 "Write mode" = "写入方式";
 "macFUSE Is Installed" = "macFUSE 已安装";
 "macFUSE Is Required" = "需要 macFUSE";
-"pCloud App" = "pCloud App";
 "pCloud Sign-in" = "pCloud 登录";
