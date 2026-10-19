@@ -36,6 +36,7 @@ public enum PCloudLogin {
         let digest: String?
         let auth: String?
         let token: String?
+        let email: String?
     }
 
     /// 2297：需要兩步驟驗證
@@ -83,6 +84,12 @@ public enum PCloudLogin {
         ]) { $1 }, region: pending.region)
         guard let auth = response.auth else { throw DAVError.posix(EIO, "pCloud tfa_login: no auth token") }
         return Session(token: auth, region: pending.region)
+    }
+
+    /// 檢查已存的 token 是否仍有效（`userinfo`）。回傳帳號 email；token 失效時拋出 EACCES。
+    /// 「鑰匙圈裡有 token」不等於已登入：token 會因登出、過期、改密碼而失效。
+    public static func validate(token: String, region: PCloudRegion) async throws -> String? {
+        try await call("userinfo", ["auth": token], region: region).email
     }
 
     /// 登出：讓 auth token 在伺服器端失效（盡力而為，失敗不影響刪除帳號）

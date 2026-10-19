@@ -11,6 +11,7 @@
 "Add a WebDAV, FTP, SFTP or pCloud account. Passwords and sign-ins are stored in the keychain." = "新增 WebDAV、FTP、SFTP 或 pCloud 帳號。密碼與登入資訊存於鑰匙圈。";
 "After installing" = "安裝之後";
 "Cancel" = "取消";
+"Checking…" = "檢查中…";
 "Choose an empty folder to use as the mount point." = "選擇一個空資料夾作為掛載點。";
 "Choose the SSH private key." = "選擇 SSH 私鑰。";
 "Choose…" = "選擇…";
@@ -97,8 +98,10 @@
 "Sign In" = "登入";
 "Sign in to pCloud first." = "請先登入 pCloud。";
 "Sign in with" = "登入方式";
+"Sign-in expired — enter the password and sign in again" = "登入已失效，請輸入密碼重新登入";
 "Signed by %@" = "簽署者：%@";
 "Signed in" = "已登入";
+"Signed in (cannot reach pCloud to verify)" = "已登入（連不上 pCloud，無法確認）";
 "Source" = "來源";
 "State" = "狀態";
 "Status" = "狀態";
@@ -125,3 +128,4 @@
 "macFUSE Is Installed" = "macFUSE 已安裝";
 "macFUSE Is Required" = "需要 macFUSE";
 "pCloud Sign-in" = "pCloud 登入";
+"pCloud sign-in has expired. Edit the account and sign in again." = "pCloud 登入已失效，請編輯帳號重新登入。";

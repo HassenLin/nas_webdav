@@ -145,9 +145,19 @@ public final class PCloudStore: RemoteStore, @unchecked Sendable {
             let head = String(decoding: (reply.0 ?? Data()).prefix(200), as: UTF8.self)
             throw DAVError.posix(EIO, "pCloud \(method): unexpected response: \(head)")
         }
-        guard env.result == 0 else { throw Self.error(env.result, env.error ?? "", method: method) }
+        guard env.result == 0 else {
+            // 帶 token 的請求回登入類錯誤＝token 失效（登出、過期、改密碼）：告訴使用者怎麼做，
+            // 而不是看不懂的「Log in failed. (2000)」
+            if Self.expiredTokenCodes.contains(env.result) {
+                throw DAVError.posix(EACCES, "pCloud sign-in has expired. Edit the account and sign in again.")
+            }
+            throw Self.error(env.result, env.error ?? "", method: method)
+        }
         return env
     }
+
+    /// 1000 未登入、2000 登入失敗、2094 token 無效、2095 token 已撤銷
+    static let expiredTokenCodes: Set<Int> = [1000, 2000, 2094, 2095]
 
     /// pCloud 錯誤碼 → errno（https://docs.pcloud.com/errors/）
     static func error(_ code: Int, _ message: String, method: String) -> DAVError {
