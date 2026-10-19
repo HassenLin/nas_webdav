@@ -23,8 +23,8 @@ struct AccountEditor: View {
     /// pCloud：等待輸入兩步驟驗證碼
     @State private var pendingTwoFactor: PCloudLogin.TwoFactorRequired?
     @State private var verificationCode = ""
-    /// pCloud：鑰匙圈中已存 token 的實際狀態（見 `checkStoredToken`）
-    @State private var storedToken: StoredTokenState = .none
+    /// pCloud：鑰匙圈中已存 token 的實際狀態（見 `PCloudTokenStatus`）
+    @State private var storedToken: PCloudTokenStatus = .checking
     @State private var signingIn = false
     @State private var testing = false
     @State private var report: ConnectionReport?
@@ -140,17 +140,7 @@ struct AccountEditor: View {
     @ViewBuilder private var pcloudSections: some View {
         Section {
             LabeledContent("Status") {
-                if pcloudToken != nil {
-                    Text("Signed in")
-                } else {
-                    switch storedToken {
-                    case .none: Text("Not signed in").foregroundStyle(.orange)
-                    case .checking: Text("Checking…").foregroundStyle(.secondary)
-                    case .valid: Text("Signed in")
-                    case .expired: Text("Sign-in expired — enter the password and sign in again").foregroundStyle(.red)
-                    case .unverified: Text("Signed in (cannot reach pCloud to verify)").foregroundStyle(.orange)
-                    }
-                }
+                (pcloudToken != nil ? PCloudTokenStatus.valid : storedToken).label(detailed: true)
             }
             if pendingTwoFactor != nil {
                 HStack {
@@ -173,26 +163,9 @@ struct AccountEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         // email 改變時重新檢查（先等 0.5 秒：連續輸入時前一次會被取消，不會每個字都打一次 API）
-        .task(id: account.username) { await checkStoredToken() }
-    }
-
-    /// 鑰匙圈中已存 token 的狀態。「有 token」不等於已登入：token 會因登出、過期、改密碼而失效，
-    /// 所以開啟表單時實際向 pCloud 確認一次。停留狀態：
-    /// none（無 token）／checking／valid／expired（需重新登入）／unverified（連不上 pCloud，無法確認）
-    enum StoredTokenState { case none, checking, valid, expired, unverified }
-
-    private func checkStoredToken() async {
-        guard proto == .pcloud, let token = KeychainStore.secret(for: account) else { return storedToken = .none }
-        storedToken = .checking
-        try? await Task.sleep(for: .milliseconds(500))
-        guard !Task.isCancelled else { return }
-        do {
-            _ = try await PCloudLogin.validate(token: token, region: account.pcloudRegion)
-            storedToken = .valid
-        } catch {
-            // 被取消（email 又改了）時 URLSession 回 cancelled，也會對應成 EACCES——不可當成失效
-            guard !Task.isCancelled else { return }
-            storedToken = (error as? DAVError)?.code == EACCES ? .expired : .unverified
+        .task(id: account.username) {
+            storedToken = .checking
+            if let status = await PCloudTokenStatus.check(account) { storedToken = status }
         }
     }
 

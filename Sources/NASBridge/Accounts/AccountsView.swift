@@ -100,14 +100,20 @@ struct AccountDraft: Identifiable {
 }
 
 /// 密碼欄：預設遮罩，按眼睛圖示才從鑰匙圈讀出顯示（可能觸發鑰匙圈授權提示）。
-/// pCloud 只顯示是否已登入（token 不顯示）；SFTP 私鑰登入顯示「私鑰」。
+/// pCloud 顯示 token 實際是否有效（向 pCloud 確認，token 本身不顯示）；SFTP 私鑰登入顯示「私鑰」。
 private struct PasswordCell: View {
     let account: Account
     @State private var revealed: String??    // nil＝未讀取；.some(nil)＝鑰匙圈沒有
+    @State private var pcloud: PCloudTokenStatus = .checking
 
     var body: some View {
         if account.protocol == .pcloud {
-            Text(KeychainStore.secret(for: account) == nil ? "Not signed in" : "Signed in")
+            // 帳號存檔（重新登入）後 account 改變 → 重新確認
+            pcloud.label(detailed: false)
+                .task(id: account) {
+                    pcloud = .checking
+                    if let status = await PCloudTokenStatus.check(account) { pcloud = status }
+                }
         } else if account.usesKeyAuth {
             Text("Private key")
         } else {

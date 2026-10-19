@@ -96,12 +96,14 @@
 "Server URL" = "伺服器網址";
 "Show Password" = "顯示密碼";
 "Sign In" = "登入";
+"Sign in again" = "請重新登入";
 "Sign in to pCloud first." = "請先登入 pCloud。";
 "Sign in with" = "登入方式";
 "Sign-in expired — enter the password and sign in again" = "登入已失效，請輸入密碼重新登入";
 "Signed by %@" = "簽署者：%@";
 "Signed in" = "已登入";
 "Signed in (cannot reach pCloud to verify)" = "已登入（連不上 pCloud，無法確認）";
+"Signed in (unverified)" = "已登入（未確認）";
 "Source" = "來源";
 "State" = "狀態";
 "Status" = "狀態";
