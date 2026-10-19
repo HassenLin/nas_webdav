@@ -25,7 +25,7 @@ struct AccountsView: View {
                 .width(min: 70, ideal: 90)
                 TableColumn("Server") { Text(verbatim: $0.serverLabel).textSelection(.enabled) }
                 TableColumn("Username") { Text($0.username) }
-                TableColumn("Password") { PasswordCell(account: $0) }
+                TableColumn("Password") { PasswordCell(account: $0, secretRevision: manager.secretRevision) }
                     .width(min: 140, ideal: 170)
                 TableColumn("Mounts") { a in Text("\(manager.mounts(using: a.id).count)").monospacedDigit() }
                     .width(56)
@@ -103,14 +103,16 @@ struct AccountDraft: Identifiable {
 /// pCloud 顯示 token 實際是否有效（向 pCloud 確認，token 本身不顯示）；SFTP 私鑰登入顯示「私鑰」。
 private struct PasswordCell: View {
     let account: Account
+    /// 祕密變更時（例如同帳號重新登入 pCloud）重新確認；見 `MountManager.secretRevision`
+    let secretRevision: Int
     @State private var revealed: String??    // nil＝未讀取；.some(nil)＝鑰匙圈沒有
     @State private var pcloud: PCloudTokenStatus = .checking
 
     var body: some View {
         if account.protocol == .pcloud {
-            // 帳號存檔（重新登入）後 account 改變 → 重新確認
+            // 帳號或祕密改變（重新登入後存檔）→ 重新確認
             pcloud.label(detailed: false)
-                .task(id: account) {
+                .task(id: [AnyHashable(account), AnyHashable(secretRevision)]) {
                     pcloud = .checking
                     if let status = await PCloudTokenStatus.check(account) { pcloud = status }
                 }

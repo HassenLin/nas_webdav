@@ -5,6 +5,7 @@
   帳號編輯器開啟時以 `userinfo` 實際驗證（`PCloudLogin.validate`），狀態分為 未登入／檢查中／已登入／登入已失效／無法確認（連不上）；
   掛載或測試連線遇到 token 類錯誤（1000／2000／2094／2095）時，訊息改為「pCloud 登入已失效，請編輯帳號重新登入」。
   帳號清單的登入欄也改為實際確認（`PCloudTokenStatus`，清單與編輯器共用）：失效時顯示「請重新登入」，連不上時顯示「已登入（未確認）」。
+  同 email、同地區重新登入時 `Account` 不變、清單不會重新確認（SmartphoneFileManager 回報）→ `MountManager.secretRevision` 在祕密變更時遞增，清單以它觸發重新確認。
 
 - 2026-10-19｜**pCloud 上傳／下載：套用 SmartphoneFileManager 踩到的雷**
   - 雷 1：`uploadfile` 回應的 `metadata` 是**陣列**（其他方法是物件），只接受物件時成功的上傳被當成「unexpected response」——

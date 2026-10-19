@@ -12,6 +12,9 @@ public final class MountManager {
     public private(set) var accounts: [Account]
     public private(set) var mounts: [MountProfile]
     public private(set) var fuse: FuseLibrary.Installation?
+    /// 帳號祕密（密碼／pCloud token）變更次數。祕密存鑰匙圈、不在 `Account` 裡：
+    /// 同 email、同地區重新登入 pCloud 時帳號本身不變，UI 靠這個值得知要重新確認登入狀態
+    public private(set) var secretRevision = 0
     @ObservationIgnored private var instances: [UUID: MountInstance] = [:]
     @ObservationIgnored private let workerURL: URL
     @ObservationIgnored private let configURL: URL
@@ -73,6 +76,7 @@ public final class MountManager {
         var next = accounts
         if let i = next.firstIndex(where: { $0.id == account.id }) { next[i] = account } else { next.append(account) }
         try persist(accounts: next)
+        if secret != nil { secretRevision += 1 }
     }
 
     /// 刪除帳號（含鑰匙圈密碼）。仍有掛載使用時拒絕，避免留下無帳號的掛載。
