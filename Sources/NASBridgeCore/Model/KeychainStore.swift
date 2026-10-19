@@ -3,7 +3,9 @@ import Security
 
 /// 帳號密碼存於登入鑰匙圈的「網際網路密碼」（kSecClassInternetPassword），以 伺服器＋埠＋協定＋使用者名稱 為鍵：
 /// 在「鑰匙圈存取」中會以該伺服器顯示，也能沿用使用者先前（例如 Finder 連接伺服器時）已存的同一組密碼。
-/// pCloud 存的是登入取得的 auth token（不存密碼），以 `pcloud.com`＋email 為鍵（不含地區）。
+/// pCloud 存兩項（皆以 email 為帳號、不含地區）：
+///   - auth token：`pcloud.com`（`secret(for:)`），平常連線用
+///   - 密碼：`my.pcloud.com`（`pcloudPassword(for:)`，與瀏覽器登入 pCloud 網頁存的項目同鍵），只在 token 失效時自動重新登入用
 ///
 /// 只有主 app 會存取鑰匙圈；worker 子行程的祕密由主 app 經 stdin 傳入，避免第二次授權提示。
 /// 存取權限綁在 app 的簽章上：`make-app.sh` 以固定的 Apple Development 憑證簽章，重新 build 不必再允許。
@@ -53,6 +55,25 @@ public enum KeychainStore {
 
     public static func delete(for account: Account) {
         if let q = query(account) { SecItemDelete(q as CFDictionary) }
+        if let q = pcloudPasswordQuery(account) { SecItemDelete(q as CFDictionary) }
+    }
+
+    // MARK: pCloud 密碼
+
+    private static func pcloudPasswordQuery(_ account: Account) -> [String: Any]? {
+        guard account.protocol == .pcloud, !account.username.isEmpty else { return nil }
+        return [kSecClass as String: kSecClassInternetPassword,
+                kSecAttrServer as String: "my.pcloud.com",
+                kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
+                kSecAttrAccount as String: account.username]
+    }
+
+    public static func pcloudPassword(for account: Account) -> String? { pcloudPasswordQuery(account).flatMap(read) }
+
+    @discardableResult
+    public static func setPCloudPassword(_ password: String, for account: Account) -> Bool {
+        guard let q = pcloudPasswordQuery(account) else { return false }
+        return write(Data(password.utf8), query: q, label: "pCloud password (NAS Bridge)")
     }
 
     // MARK: 共用

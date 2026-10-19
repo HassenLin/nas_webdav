@@ -8,7 +8,7 @@ import SwiftUI
 ///   - WebDAV：伺服器網址（可含路徑前綴）、憑證釘選（SHA-256）
 ///   - FTP：加密（FTPS explicit／implicit／無）、資料通道（被動／主動）、FTPS 自簽憑證指紋
 ///   - SFTP：密碼或私鑰登入
-///   - pCloud：地區、email＋密碼登入（兩步驟驗證時再輸入驗證碼）；鑰匙圈只存登入 token，不存密碼
+///   - pCloud：地區、email＋密碼登入（兩步驟驗證時再輸入驗證碼）；鑰匙圈存登入 token 與密碼（token 失效時自動重新登入）
 struct AccountEditor: View {
     let manager: MountManager
     let isNew: Bool
@@ -18,8 +18,9 @@ struct AccountEditor: View {
     @State private var account: Account
     /// 空字串＝沿用鑰匙圈中的密碼（pCloud：只用來登入，不儲存）
     @State private var password = ""
-    /// pCloud：這次登入取得、尚未存入鑰匙圈的 token
+    /// pCloud：這次登入取得、尚未存入鑰匙圈的 token 與登入成功的密碼（存檔時一起存入鑰匙圈）
     @State private var pcloudToken: String?
+    @State private var pcloudPassword: String?
     /// pCloud：等待輸入兩步驟驗證碼
     @State private var pendingTwoFactor: PCloudLogin.TwoFactorRequired?
     @State private var verificationCode = ""
@@ -130,7 +131,8 @@ struct AccountEditor: View {
             }
         }
         if proto == .pcloud {
-            SecureField("Password", text: $password, prompt: Text("Used only to sign in — not stored"))
+            SecureField("Password", text: $password,
+                        prompt: Text(isNew ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
         } else if !account.usesKeyAuth {
             SecureField("Password", text: $password,
                         prompt: Text(isNew ? "Stored in the keychain" : "Saved in Keychain — leave blank to keep"))
@@ -159,13 +161,13 @@ struct AccountEditor: View {
         } header: {
             Text("pCloud Sign-in")
         } footer: {
-            Text("The password is sent only as a one-time digest to get a sign-in token; only the token is stored in the keychain. The region is detected automatically.")
+            Text("The password is sent only as a one-time digest. The sign-in token and the password are stored in the keychain; when the token expires, NAS Bridge signs in again automatically. The region is detected automatically.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         // email 改變時重新檢查（先等 0.5 秒：連續輸入時前一次會被取消，不會每個字都打一次 API）
         .task(id: account.username) {
             storedToken = .checking
-            if let status = await PCloudTokenStatus.check(account) { storedToken = status }
+            if let status = await PCloudTokenStatus.check(account, manager: manager) { storedToken = status }
         }
     }
 
@@ -273,6 +275,7 @@ struct AccountEditor: View {
     /// pCloud 帳號密碼登入：成功拿 token；帳號開了兩步驟驗證則先顯示驗證碼欄位（`verify`）。
     private func signIn() {
         let (email, pw, region) = (account.username, password, account.pcloudRegion)
+        pcloudPassword = pw   // 兩步驟驗證完成後也要存這個密碼
         runSignIn { try await PCloudLogin.signIn(email: email, password: pw, preferredRegion: region) }
     }
 
@@ -309,12 +312,15 @@ struct AccountEditor: View {
         error = nil
         account.pinnedCertSHA256 = Account.normalizeFingerprint(account.pinnedCertSHA256)
         let secret: String?
+        var pcloudSaved: String?
         switch proto {
         case .pcloud:
             if pcloudToken == nil, KeychainStore.secret(for: account) == nil {
                 return error = String(localized: "Sign in to pCloud first.")
             }
             secret = pcloudToken
+            // 只存登入成功的密碼（未登入成功的輸入不存）
+            pcloudSaved = pcloudToken == nil ? nil : pcloudPassword
         default:
             if password.isEmpty, isNew, !account.usesKeyAuth, KeychainStore.secret(for: account) == nil {
                 return error = String(localized: "Password is required.")
@@ -322,7 +328,7 @@ struct AccountEditor: View {
             secret = password.isEmpty ? nil : password
         }
         do {
-            try manager.saveAccount(account, secret: secret)
+            try manager.saveAccount(account, secret: secret, pcloudPassword: pcloudSaved)
             onSaved(account)
             dismiss()
         } catch let e as DAVError {

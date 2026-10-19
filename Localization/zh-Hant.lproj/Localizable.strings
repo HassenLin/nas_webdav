@@ -110,7 +110,7 @@
 "Stored in the keychain" = "存於鑰匙圈";
 "Test Connection" = "測試連線";
 "The password is also removed from the keychain." = "密碼也會從鑰匙圈移除。";
-"The password is sent only as a one-time digest to get a sign-in token; only the token is stored in the keychain. The region is detected automatically." = "密碼只以一次性摘要送出、換取登入 token；鑰匙圈只存 token，不存密碼。地區會自動偵測。";
+"The password is sent only as a one-time digest. The sign-in token and the password are stored in the keychain; when the token expires, NAS Bridge signs in again automatically. The region is detected automatically." = "密碼只以一次性摘要送出。登入 token 與密碼都存在鑰匙圈；token 失效時 NAS Bridge 會自動重新登入。地區會自動偵測。";
 "The volume is unmounted. Files on the server are not affected." = "會先卸載磁碟，伺服器上的檔案不受影響。";
 "Trust This Certificate" = "信任此憑證";
 "Trust the certificate in the account settings." = "請在帳號設定中信任此憑證。";
@@ -121,7 +121,6 @@
 "Unmount" = "卸載";
 "Unmount All" = "全部卸載";
 "Unmounting…" = "卸載中…";
-"Used only to sign in — not stored" = "只用於登入，不會儲存";
 "Username" = "使用者名稱";
 "Verification code" = "驗證碼";
 "Verify" = "驗證";

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// - **地區**：美國帳號只能打 `api.pcloud.com`、歐洲帳號只能打 `eapi.pcloud.com`（`PCloudRegion`）。
 /// - 認證：帳號密碼登入（`PCloudLogin`，在帳號編輯器做一次）取得的 auth token，每個請求帶 `auth=` 參數。
-///   鑰匙圈只存 token、不存密碼。
+///   這裡只拿到 token；token 失效時的自動重新登入在主 app（`MountManager.pcloudToken`）。
 /// - 回應一律 HTTP 200，成敗看 JSON 的 `result`（0＝成功），錯誤碼對應見 `error(_:_:method:)`。
 /// - 所有操作以**路徑**指定（`path=`／`topath=`），與 FUSE 的路徑模型一致，不需維護 id 對照。
 /// - 讀取：`getfilelink` 取得 CDN 連結後 Range GET；連結有效數小時，每個路徑快取 10 分鐘，寫入／改名／刪除即失效。

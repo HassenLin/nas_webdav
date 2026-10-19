@@ -15,7 +15,8 @@ import Foundation
 /// 4. 地區：帳號只存在一區。在錯的區登入回 **2321**（This user is on another location），有時也回 2000 →
 ///    先試帳號設定的區，失敗再試另一區，成功的那區就是帳號地區。
 ///
-/// 只存 auth token（鑰匙圈），不存密碼；刪除帳號時呼叫 `logout` 讓 token 在伺服器端失效。
+/// 鑰匙圈存 auth token（平常用）與密碼（token 失效時 `MountManager.pcloudToken` 自動重新登入；已信任此裝置，不再要驗證碼）；
+/// 刪除帳號時呼叫 `logout` 讓 token 在伺服器端失效。
 /// 只在主 app（帳號編輯器）使用；worker 拿到的是 token。
 public enum PCloudLogin {
     /// 登入結果：token 與帳號實際所在地區

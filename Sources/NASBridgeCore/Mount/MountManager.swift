@@ -61,13 +61,19 @@ public final class MountManager {
     // MARK: - 帳號
 
     /// 新增或更新帳號；secret（密碼或 pCloud token）為 nil 表示不變更鑰匙圈中的值。
+    /// `pcloudPassword`：pCloud 登入用的密碼（token 失效時自動重新登入），nil＝不變更。
     /// 伺服器、協定或使用者名稱變更時，鑰匙圈項目的鍵也跟著變，舊密碼會搬到新鍵。
-    public func saveAccount(_ account: Account, secret: String?) throws {
+    public func saveAccount(_ account: Account, secret: String?, pcloudPassword: String? = nil) throws {
         if let msg = account.validationError() { throw DAVError.posix(EINVAL, msg) }
         let old = self.account(account.id)
         let keyChanged = old.map { !KeychainStore.sameItem($0, account) } ?? false
         let value = secret ?? (keyChanged ? old.flatMap(KeychainStore.secret(for:)) : nil)
         if let value, !KeychainStore.setSecret(value, for: account) {
+            throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
+        }
+        if account.protocol == .pcloud,
+           let pw = pcloudPassword ?? (keyChanged ? old.flatMap(KeychainStore.pcloudPassword(for:)) : nil),
+           !KeychainStore.setPCloudPassword(pw, for: account) {
             throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
         }
         if keyChanged, let old, !accounts.contains(where: { $0.id != old.id && KeychainStore.sameItem($0, old) }) {
@@ -125,10 +131,52 @@ public final class MountManager {
     @discardableResult
     public func mount(_ id: UUID) async -> Bool {
         guard refreshFUSE() else { return false }
-        guard let m = mountProfile(id), let account = account(m.accountID) else { return true }
-        let credential = KeychainStore.secret(for: account) ?? ""
+        guard let m = mountProfile(id), var account = account(m.accountID) else { return true }
+        var credential = KeychainStore.secret(for: account) ?? ""
+        if account.protocol == .pcloud, let token = try? await pcloudToken(for: account) {
+            credential = token
+            account = self.account(account.id) ?? account   // 重新登入可能更新了地區
+        }   // 失敗（連不上、要驗證碼）就用原 token，由 worker 回報錯誤
         await instance(for: id).mount(WorkerConfig(account: account, mount: m, credential: credential))
         return true
+    }
+
+    // MARK: - pCloud token
+
+    /// 取得可用的 pCloud token：已存 token 有效就用；失效且鑰匙圈有密碼時自動重新登入並存回。
+    /// 重新登入不會再要兩步驟驗證碼：第一次登入時已「信任此裝置」（`trustdevice`，以固定的 deviceid 辨識）。
+    /// - Throws: EACCES＝需使用者在帳號編輯器重新登入（沒有 token／密碼、密碼已改、要驗證碼）；其他＝連不上等。
+    public func pcloudToken(for account: Account) async throws -> String {
+        let region = account.pcloudRegion
+        if let token = KeychainStore.secret(for: account) {
+            do {
+                _ = try await PCloudLogin.validate(token: token, region: region)
+                return token
+            } catch let e as DAVError where e.code == EACCES {
+                // token 失效 → 下面用密碼重新登入
+            }
+        }
+        guard let password = KeychainStore.pcloudPassword(for: account) else {
+            throw DAVError.posix(EACCES, "pCloud sign-in has expired. Edit the account and sign in again.")
+        }
+        let session: PCloudLogin.Session
+        do {
+            session = try await PCloudLogin.signIn(email: account.username, password: password, preferredRegion: region)
+        } catch is PCloudLogin.TwoFactorRequired {
+            throw DAVError.posix(EACCES, "pCloud sign-in has expired. Edit the account and sign in again.")
+        }
+        guard KeychainStore.setSecret(session.token, for: account) else {
+            throw DAVError.posix(EIO, "Cannot save the password to the keychain.")
+        }
+        // 帳號實際在另一區：更新已存的帳號設定
+        if session.region != region, var saved = self.account(account.id) {
+            saved.pcloudRegion = session.region
+            var next = accounts
+            if let i = next.firstIndex(where: { $0.id == saved.id }) { next[i] = saved }
+            try? persist(accounts: next)
+        }
+        secretRevision += 1
+        return session.token
     }
 
     public func unmount(_ id: UUID, force: Bool = false) async {
