@@ -16,6 +16,8 @@ final class LftpSession: @unchecked Sendable {
     private let executable: String
     private let prelude: [String]
     private let environment: [String: String]
+    /// 與 lftp 之間的位元組編碼（見 `FTPEncoding`）：指令以它編碼寫入、輸出以它解碼
+    private let encoding: String.Encoding
     private let marker = "@@NB-\(UUID().uuidString)@@"
 
     private var process: Process?
@@ -25,10 +27,39 @@ final class LftpSession: @unchecked Sendable {
     private var buffer = Data()
     private var eof = false
 
-    init(executable: String, prelude: [String], environment: [String: String]) {
+    init(executable: String, prelude: [String], environment: [String: String], encoding: String.Encoding = .utf8) {
         self.executable = executable
         self.prelude = prelude
         self.environment = environment
+        self.encoding = encoding
+    }
+
+    /// 指令列 → 位元組。非 UTF-8 時逐字轉換，並處理 Big5／GBK 的「第二位元組是 `\`」問題（許、功、蓋…）：
+    /// lftp 以位元組解析指令列，這個位元組會被當成跳脫字元吞掉 → 前面再補一個 `\`，lftp 解析後還原成原本的位元組。
+    /// - Throws: EILSEQ：檔名含所選編碼無法表示的字元（例如 emoji）。
+    static func encode(_ line: String, _ encoding: String.Encoding) throws -> Data {
+        if encoding == .utf8 { return Data(line.utf8) }
+        var out = Data()
+        for ch in line {
+            guard let bytes = String(ch).data(using: encoding) else {
+                throw DAVError.posix(EILSEQ, "The file name contains characters the server encoding cannot represent.")
+            }
+            if bytes.count > 1 {
+                for (i, b) in bytes.enumerated() {
+                    if i > 0, b == UInt8(ascii: "\\") { out.append(b) }
+                    out.append(b)
+                }
+            } else {
+                out.append(bytes)
+            }
+        }
+        return out
+    }
+
+    private func decode<D: DataProtocol>(_ bytes: D) -> String {
+        let data = Data(bytes)
+        if encoding != .utf8, let s = String(data: data, encoding: encoding) { return s }
+        return String(decoding: data, as: UTF8.self)
     }
 
     deinit { stop() }
@@ -39,8 +70,9 @@ final class LftpSession: @unchecked Sendable {
         try startIfNeeded()
         cond.withLock { buffer.removeAll() }
         let line = "\(command) && echo \(marker)OK || echo \(marker)ERR\n"
+        let data = try Self.encode(line, encoding)
         do {
-            try input?.write(contentsOf: Data(line.utf8))
+            try input?.write(contentsOf: data)
         } catch {
             stop()
             throw DAVError.posix(EIO, "lftp is not running")
@@ -61,13 +93,13 @@ final class LftpSession: @unchecked Sendable {
             if let r = buffer.range(of: tag, in: max(0, scanned - tag.count)..<buffer.count),
                let nl = buffer[r.upperBound...].firstIndex(of: UInt8(ascii: "\n")) {
                 let status = String(decoding: buffer[r.upperBound..<nl], as: UTF8.self)
-                let output = String(decoding: buffer[..<r.lowerBound], as: UTF8.self)
+                let output = decode(buffer[..<r.lowerBound])
                 buffer = Data(buffer[(nl + 1)...])   // 重建：讓索引回到 0（Data 切片保留原索引）
                 return (output, status == "OK")
             }
             scanned = buffer.count
             if eof {
-                let output = String(decoding: buffer, as: UTF8.self)
+                let output = decode(buffer)
                 cond.unlock(); stop(); cond.lock()
                 let e = LftpError.classify(output)
                 throw e.code == EIO ? DAVError.posix(EIO, "lftp exited: \(e.message)") : e
@@ -112,7 +144,7 @@ final class LftpSession: @unchecked Sendable {
         }
         process = p
         input = stdin.fileHandleForWriting
-        try? input?.write(contentsOf: Data((prelude.joined(separator: "\n") + "\n").utf8))
+        try? input?.write(contentsOf: Self.encode(prelude.joined(separator: "\n") + "\n", encoding))
     }
 
     func stop() {

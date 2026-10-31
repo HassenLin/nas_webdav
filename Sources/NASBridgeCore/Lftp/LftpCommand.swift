@@ -68,6 +68,8 @@ struct LftpCommand: Sendable, Equatable {
             return lines
         }
         lines.append("set ftp:passive-mode \(account.ftpMode == .passive ? "on" : "off")")
+        // 選了非 UTF-8：伺服器即使宣告 UTF8，lftp 也不可自行切到 UTF-8
+        if account.ftpEncoding.textEncoding != .utf8 { lines.append("set ftp:use-utf8 off") }
         switch account.ftpSecurity {
         case .none:
             lines.append("set ftp:ssl-allow no")

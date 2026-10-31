@@ -30,6 +30,9 @@ public final class LftpStore: RemoteStore, @unchecked Sendable {
 
     private let root: RemoteRoot
     private let timeout: TimeInterval
+    /// 每個指令前送出的編碼指令（`FTPEncoding.serverCommand`）。每個指令都送：lftp 閒置斷線後會自動重連，
+    /// 重連後伺服器又回到預設編碼，只送一次會失效。代價是每個指令多一次往返
+    private let encodingPrefix: String
     private let available: DispatchSemaphore
     private let lock = NSLock()
     private var idle: [LftpSession]
@@ -39,12 +42,18 @@ public final class LftpStore: RemoteStore, @unchecked Sendable {
         guard let lftp = ToolLocator.lftp else { throw DAVError.posix(ENOENT, "FTP and SFTP need lftp: brew install lftp") }
         root = RemoteRoot(remotePath)
         self.timeout = timeout
+        // 伺服器不認得時 quote 失敗，`;` 讓後面的指令照常執行；回覆導到 /dev/null 不混進輸出
+        let serverCommand = account.protocol == .ftp ? account.ftpEncoding.serverCommand : nil
+        encodingPrefix = serverCommand.map { "quote \(LftpCommand.rawQuote($0)) > /dev/null; " } ?? ""
         let command = LftpCommand(account: account, timeout: Int(timeout), knownHostsFile: Self.knownHostsFile.path)
         var env = ["LC_ALL": "C", "LANG": "C", "LFTP_PASSWORD": password]
         if account.protocol == .ftp, account.ftpSecurity != .none, let conf = Self.tls12Config {
             env["OPENSSL_CONF"] = conf.path
         }
-        idle = (0..<Self.poolSize).map { _ in LftpSession(executable: lftp, prelude: command.prelude, environment: env) }
+        let encoding = account.protocol == .ftp ? account.ftpEncoding.textEncoding : .utf8
+        idle = (0..<Self.poolSize).map { _ in
+            LftpSession(executable: lftp, prelude: command.prelude, environment: env, encoding: encoding)
+        }
         available = DispatchSemaphore(value: Self.poolSize)
     }
 
@@ -83,7 +92,7 @@ public final class LftpStore: RemoteStore, @unchecked Sendable {
             available.signal()
         }
         // 每次嘗試的逾時 × 重試次數再加緩衝（lftp 內部會重連重試）
-        return try session.run(command, timeout: transfer ? nil : timeout * 4 + 15)
+        return try session.run(encodingPrefix + command, timeout: transfer ? nil : timeout * 4 + 15)
     }
 
     private func q(_ path: String) throws -> String { try LftpCommand.quote(root.absolute(path)) }

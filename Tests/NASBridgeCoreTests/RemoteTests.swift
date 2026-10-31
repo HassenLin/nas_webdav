@@ -309,6 +309,29 @@ final class FakeStore: RemoteStore, @unchecked Sendable {
     }
 }
 
+@Suite struct FTPEncodingTests {
+    @Test func big5BackslashTrailByteIsEscaped() throws {
+        // 「許」的 Big5 為 B3 5C：第二位元組是 `\`，必須補成 B3 5C 5C，lftp 解析後才還原
+        let data = try LftpSession.encode("許", FTPEncoding.big5.textEncoding)
+        #expect(Array(data) == [0xB3, 0x5C, 0x5C])
+        #expect(Array(try LftpSession.encode("a\\b", FTPEncoding.big5.textEncoding)) == Array("a\\b".utf8))
+        #expect(try LftpSession.encode("中文", .utf8) == Data("中文".utf8))
+    }
+
+    @Test func unrepresentableCharacterFails() {
+        #expect(throws: DAVError.self) { try LftpSession.encode("😀", FTPEncoding.big5.textEncoding) }
+    }
+
+    @Test func serverCommandsAndSettings() {
+        #expect(FTPEncoding.auto.serverCommand == nil)
+        #expect(FTPEncoding.utf8.serverCommand == "OPTS UTF8 ON")
+        #expect(FTPEncoding.big5.serverCommand == "OPTS UTF8 OFF")
+        var a = Account(protocol: .ftp)
+        a.ftpEncoding = .big5
+        #expect(LftpCommand(account: a, timeout: 10, knownHostsFile: "/k").settings.contains("set ftp:use-utf8 off"))
+    }
+}
+
 @Suite struct PCloudTests {
     @Test func regionHostsAndURLEncoding() {
         let store = PCloudStore(region: .eu, remotePath: "/", token: "t", timeout: 5)
@@ -386,7 +409,27 @@ struct LiveLftpTests {
         a.username = comps.user ?? ""
         if let key = comps.fragment { a.sftpKeyPath = (key as NSString).expandingTildeInPath }
         a.ftpsTrustedFingerprint = ProcessInfo.processInfo.environment["NB_LIVE_FTPS_FP"] ?? ""
+        // ?enc=big5：檔名編碼
+        if let enc = comps.queryItems?.first(where: { $0.name == "enc" })?.value { a.ftpEncoding = FTPEncoding(rawValue: enc)! }
         return (a, comps.password ?? "", comps.path.isEmpty ? "/" : comps.path)
+    }
+
+    /// 中文檔名往返：含第二位元組為 `\` 的 Big5 字（許、功、蓋）
+    @Test(arguments: ProcessInfo.processInfo.environment["NB_LIVE_LFTP", default: ""].split(separator: " ").map(String.init))
+    func chineseNames(spec: String) throws {
+        let (account, password, remotePath) = Self.account(spec)
+        let store = try RemoteStoreFactory.connect(account, remotePath: remotePath, credential: password, probeWrites: false)
+        let dir = "/中文資料夾-\(UUID().uuidString.prefix(6))"
+        let file = dir + "/許功蓋 檔名.txt"
+        try store.mkdir(dir)
+        defer { try? store.remove(file, isDirectory: false); try? store.remove(dir, isDirectory: true) }
+        try store.upload(file, data: Data("內容".utf8))
+        #expect(try store.list(dir).map(\.name) == ["許功蓋 檔名.txt"])
+        #expect(try store.stat(file).size == Int64(Data("內容".utf8).count))
+        let renamed = dir + "/改名 蓋.txt"
+        try store.rename(file, to: renamed)
+        #expect(try store.list(dir).map(\.name) == ["改名 蓋.txt"])
+        try store.remove(renamed, isDirectory: false)
     }
 
     @Test(arguments: ProcessInfo.processInfo.environment["NB_LIVE_LFTP", default: ""].split(separator: " ").map(String.init))

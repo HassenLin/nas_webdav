@@ -105,6 +105,12 @@ struct AccountEditor: View {
                 Text("FTPS — implicit TLS").tag(FTPSecurity.implicit)
                 Text("None (unencrypted)").tag(FTPSecurity.none)
             }
+            Picker("File name encoding", selection: $account.ftpEncoding) {
+                Text("Automatic").tag(FTPEncoding.auto)
+                Text("UTF-8 (send OPTS UTF8 ON)").tag(FTPEncoding.utf8)
+                Text("Big5 — Traditional Chinese").tag(FTPEncoding.big5)
+                Text("GBK — Simplified Chinese").tag(FTPEncoding.gbk)
+            }
             Picker("Data connection", selection: $account.ftpMode) {
                 Text("Passive").tag(FTPMode.passive)
                 Text("Active").tag(FTPMode.active)

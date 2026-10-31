@@ -1,5 +1,13 @@
 # LOG
 
+- 2026-10-19｜**FTP 中文檔名亂碼：新增「檔名編碼」選項**
+  - 原因：lftp 只在伺服器 `FEAT` 宣告 `UTF8` 時才送 `OPTS UTF8 ON`；支援 UTF-8 卻沒宣告的伺服器以本地碼頁（Big5）傳檔名，Finder 顯示亂碼或 `?`。
+    Homebrew lftp 4.9.3 的 `ftp:charset` 無法使用（連 ISO-8859-1 都回「不支援這種編碼」），不能靠 lftp 轉換。
+  - 帳號新增 `ftpEncoding`：自動／UTF-8（每個指令前送 `OPTS UTF8 ON`）／Big5（CP950）／GBK（CP936）（送 `OPTS UTF8 OFF`，
+    由 `LftpSession` 以該編碼寫入指令、解碼輸出；Big5 第二位元組為 `\` 的字補跳脫；無法表示的字元回 EILSEQ）。
+  - 驗證：以 pyftpdlib 模擬 Big5 伺服器（不宣告 UTF8）——「自動」重現失敗（伺服器回 can't decode path）；選 Big5 後中文資料夾、
+    「許功蓋 檔名.txt」建立／列出／改名與完整檔案系統情境通過；UTF-8 伺服器選 UTF-8 亦通過，debug 確認 `OPTS UTF8 ON` 有送出。
+
 - 2026-10-19｜**pCloud 密碼存入鑰匙圈，token 失效時自動重新登入**
   - 鑰匙圈存兩項：token（`pcloud.com`＋email，平常用）、密碼（`my.pcloud.com`＋email，與瀏覽器存的 pCloud 網頁密碼同鍵）。
   - `MountManager.pcloudToken(for:)`：確認 token 有效；失效且有密碼時自動重新登入、存回 token（地區不同時一併更新帳號）。

@@ -51,6 +51,46 @@ public enum FTPMode: String, Codable, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+/// FTP 檔名編碼。
+///
+/// 雷：lftp 只在伺服器 `FEAT` 宣告 `UTF8` 時才送 `OPTS UTF8 ON`；支援 UTF-8 卻沒宣告的伺服器（Windows IIS、
+/// 部分 NAS／路由器）就以本地碼頁（台灣多為 Big5）傳檔名 → Finder 顯示亂碼或 `?`。
+/// 而 Homebrew 的 lftp 4.9.3 無法轉換編碼（`ftp:charset` 一律回「不支援這種編碼」），
+/// 所以由 app 自己處理：每個指令前送出所選編碼對應的指令，非 UTF-8 時在送給／讀自 lftp 時轉換（`LftpSession`）。
+public enum FTPEncoding: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// 交給 lftp（伺服器宣告 UTF8 時用 UTF-8）
+    case auto
+    /// 強制 UTF-8：每個指令前送 `OPTS UTF8 ON`
+    case utf8
+    /// 繁體中文（CP950）：送 `OPTS UTF8 OFF`，檔名以 Big5 收送
+    case big5
+    /// 簡體中文（CP936）：送 `OPTS UTF8 OFF`，檔名以 GBK 收送
+    case gbk
+
+    public var id: String { rawValue }
+
+    /// 每個指令前送給伺服器的編碼指令；nil＝不送（交給 lftp）
+    public var serverCommand: String? {
+        switch self {
+        case .auto: nil
+        case .utf8: "OPTS UTF8 ON"
+        case .big5, .gbk: "OPTS UTF8 OFF"
+        }
+    }
+
+    /// 與 lftp 之間的位元組編碼（lftp 不轉換，原樣轉送給伺服器）
+    public var textEncoding: String.Encoding {
+        func cf(_ e: CFStringEncodings) -> String.Encoding {
+            String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(e.rawValue)))
+        }
+        switch self {
+        case .auto, .utf8: return .utf8
+        case .big5: return cf(.dosChineseTrad)      // CP950：Big5＋微軟擴充，台灣 Windows／NAS 實際使用的版本
+        case .gbk: return cf(.dosChineseSimplif)    // CP936
+        }
+    }
+}
+
 /// pCloud 資料中心。帳號建立時就固定在其中一區，API host 不同、互不相通（打錯區會回 2000 登入失敗）。
 public enum PCloudRegion: String, Codable, CaseIterable, Identifiable, Sendable {
     /// 美國（locationid 1）
@@ -85,6 +125,8 @@ public struct Account: Codable, Identifiable, Hashable, Sendable {
 
     public var ftpSecurity: FTPSecurity = .explicit
     public var ftpMode: FTPMode = .passive
+    /// FTP 檔名編碼（伺服器檔名顯示亂碼時調整）
+    public var ftpEncoding: FTPEncoding = .auto
     /// FTPS：信任的自簽憑證指紋（lftp 錯誤訊息中的 `AA:BB:…` 格式，餵給 `ssl:verify-certificate/<指紋>`）
     public var ftpsTrustedFingerprint = ""
     /// SFTP：私鑰檔路徑；空字串＝密碼登入。有密語的金鑰請先加入 ssh-agent。
@@ -201,6 +243,7 @@ public extension Account {
         pinnedCertSHA256 = try c.decodeIfPresent(String.self, forKey: .pinnedCertSHA256) ?? base.pinnedCertSHA256
         ftpSecurity = try c.decodeIfPresent(FTPSecurity.self, forKey: .ftpSecurity) ?? base.ftpSecurity
         ftpMode = try c.decodeIfPresent(FTPMode.self, forKey: .ftpMode) ?? base.ftpMode
+        ftpEncoding = try c.decodeIfPresent(FTPEncoding.self, forKey: .ftpEncoding) ?? base.ftpEncoding
         ftpsTrustedFingerprint = try c.decodeIfPresent(String.self, forKey: .ftpsTrustedFingerprint) ?? base.ftpsTrustedFingerprint
         sftpKeyPath = try c.decodeIfPresent(String.self, forKey: .sftpKeyPath) ?? base.sftpKeyPath
         pcloudRegion = try c.decodeIfPresent(PCloudRegion.self, forKey: .pcloudRegion) ?? base.pcloudRegion
